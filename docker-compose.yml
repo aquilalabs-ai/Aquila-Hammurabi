@@ -17,11 +17,14 @@ services:
   neo4j:
     image: neo4j:5
     ports:
-      - "7475:7474"   # Browser
+      - "7476:7474"   # Browser
       - "7688:7687"   # Bolt
     environment:
       NEO4J_AUTH: neo4j/password
       NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_server_bolt_advertised__address: "localhost:7688"
+      NEO4J_server_http_advertised__address: "localhost:7476"
+      NEO4J_dbms_routing_enabled: "false"
     volumes:
       - neo4j_data:/data
 

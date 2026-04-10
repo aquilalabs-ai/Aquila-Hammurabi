@@ -18,11 +18,6 @@ FOR (lc:LegalCode) REQUIRE lc.id IS UNIQUE;
 CREATE CONSTRAINT article_id_unique IF NOT EXISTS
 FOR (a:Article) REQUIRE a.id IS UNIQUE;
 
-// Article node: composite business key — no two articles share the same
-// jurisdiction + code + article number within a given effective version.
-// (Neo4j 5.7+ supports node-key constraints on multiple properties.)
-CREATE CONSTRAINT article_jurisdiction_code_article_unique IF NOT EXISTS
-FOR (a:Article) REQUIRE (a.jurisdiction, a.code, a.article) IS NODE KEY;
 
 // Case node: unique docket/case identifier (e.g. "fr-cassiv-2023-21-1234")
 CREATE CONSTRAINT case_id_unique IF NOT EXISTS

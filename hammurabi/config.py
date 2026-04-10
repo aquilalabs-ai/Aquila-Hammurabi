@@ -12,6 +12,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        env_ignore_empty=True,
     )
 
     # ── LLM ──────────────────────────────────────────────────────────────────
@@ -57,6 +58,10 @@ class Settings(BaseSettings):
     )
     qdrant_api_key: str | None = Field(
         default=None, description="Qdrant API key (None for unauthenticated local dev)."
+    )
+    embedding_dim: int = Field(
+        default=768,
+        description="Dimensionality of the embedding model output (nomic-embed-text=768).",
     )
 
     # ── PostgreSQL ────────────────────────────────────────────────────────────
