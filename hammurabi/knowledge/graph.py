@@ -424,6 +424,20 @@ class LegalGraphClient:
     # Existence checks
     # ------------------------------------------------------------------
 
+    async def search_article_ids(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Return up to *limit* articles whose id contains *q* (case-insensitive)."""
+        rows = await self._run(
+            """
+            MATCH (a:Article)
+            WHERE toLower(a.id) CONTAINS toLower($q)
+            RETURN a.id AS id, coalesce(a.heading, '') AS heading, coalesce(a.code, '') AS code
+            ORDER BY a.id
+            LIMIT $limit
+            """,
+            {"q": q, "limit": limit},
+        )
+        return rows
+
     async def article_exists(self, article_id: str) -> bool:
         """Return True when an Article with *article_id* exists in the graph."""
         rows = await self._run(

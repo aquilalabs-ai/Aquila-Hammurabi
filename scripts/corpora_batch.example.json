@@ -1,0 +1,32 @@
+[
+  {
+    "source": "data/codes/code_civil.xml",
+    "code": "Code civil",
+    "jurisdiction": "FR",
+    "corpus_id": "fr-civil"
+  },
+  {
+    "source": "data/codes/code_travail.xml",
+    "code": "Code du travail",
+    "jurisdiction": "FR",
+    "corpus_id": "fr-travail"
+  },
+  {
+    "source": "data/codes/code_commerce.xml",
+    "code": "Code de commerce",
+    "jurisdiction": "FR",
+    "corpus_id": "fr-commerce"
+  },
+  {
+    "source": "data/codes/code_penal.xml",
+    "code": "Code pénal",
+    "jurisdiction": "FR",
+    "corpus_id": "fr-penal"
+  },
+  {
+    "source": "data/codes/code_procedure_civile.xml",
+    "code": "Code de procédure civile",
+    "jurisdiction": "FR",
+    "corpus_id": "fr-cpc"
+  }
+]

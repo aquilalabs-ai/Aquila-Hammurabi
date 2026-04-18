@@ -1,4 +1,4 @@
-"""Qdrant vector store — async embed + hybrid dense/sparse search with RRF.
+"""Qdrant vector store — async hybrid dense + sparse search with RRF.
 
 Architecture
 ------------
@@ -20,21 +20,22 @@ importing this module never triggers the driver at startup.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
 import re
 import uuid
 from collections import Counter
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
-import httpx
-
 from hammurabi.config import settings
 from hammurabi.ingestion.models import LegalChunk
 from hammurabi.knowledge.models import SearchResult
 
 if TYPE_CHECKING:
-    from qdrant_client import AsyncQdrantClient  # noqa: F401
+    from openai import AsyncOpenAI
+    from qdrant_client import AsyncQdrantClient
     from qdrant_client.http.models import (  # noqa: F401
         Distance,
         Filter,
@@ -46,6 +47,8 @@ if TYPE_CHECKING:
         VectorParams,
     )
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Collection names
 # ---------------------------------------------------------------------------
@@ -54,7 +57,6 @@ COLLECTION_STATUTES = "hammurabi_statutes"
 COLLECTION_CASES = "hammurabi_cases"
 COLLECTION_DOCUMENTS = "hammurabi_documents"
 
-# Map segment_type → collection name
 _SEGMENT_TO_COLLECTION: dict[str, str] = {
     "article": COLLECTION_STATUTES,
     "judgment_part": COLLECTION_CASES,
@@ -74,71 +76,13 @@ def _collection_for_chunk(chunk: LegalChunk) -> str:
 
 _STOPWORDS: frozenset[str] = frozenset(
     {
-        "the",
-        "a",
-        "an",
-        "and",
-        "or",
-        "but",
-        "in",
-        "on",
-        "at",
-        "to",
-        "for",
-        "of",
-        "with",
-        "by",
-        "from",
-        "as",
-        "is",
-        "was",
-        "are",
-        "were",
-        "be",
-        "been",
-        "being",
-        "have",
-        "has",
-        "had",
-        "do",
-        "does",
-        "did",
-        "will",
-        "would",
-        "could",
-        "should",
-        "may",
-        "might",
-        "shall",
-        "can",
-        "not",
-        "no",
-        "nor",
-        "so",
-        "yet",
-        "both",
-        "either",
-        "neither",
-        "each",
-        "le",
-        "la",
-        "les",
-        "de",
-        "du",
-        "des",
-        "et",
-        "en",
-        "un",
-        "une",
-        "que",
-        "qui",
-        "ce",
-        "se",
-        "sa",
-        "son",
-        "ses",
-        "au",
-        "aux",
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+        "of", "with", "by", "from", "as", "is", "was", "are", "were", "be",
+        "been", "being", "have", "has", "had", "do", "does", "did", "will",
+        "would", "could", "should", "may", "might", "shall", "can", "not",
+        "no", "nor", "so", "yet", "both", "either", "neither", "each",
+        "le", "la", "les", "de", "du", "des", "et", "en", "un", "une",
+        "que", "qui", "ce", "se", "sa", "son", "ses", "au", "aux",
     }
 )
 
@@ -146,18 +90,13 @@ _TOKEN_RE = re.compile(r"\b[a-zA-Zàáâãäåæçèéêëìíîïðñòóôõö
 
 
 def _sparse_vector(text: str) -> tuple[list[int], list[float]]:
-    """Convert *text* to a sparse TF vector suitable for Qdrant.
-
-    Each unique token is hashed to a 23-bit index (≤ 8 388 608 buckets).
-    Weights are normalised term frequencies in [0, 1].
-    """
+    """Convert *text* to a sparse TF vector suitable for Qdrant."""
     tokens = [t for t in _TOKEN_RE.findall(text.lower()) if t not in _STOPWORDS]
     if not tokens:
         return [], []
 
     tf = Counter(tokens)
     total = len(tokens)
-    # Accumulate weight per bucket (handles rare hash collisions gracefully)
     bucket: dict[int, float] = {}
     for token, count in tf.items():
         idx = int(hashlib.md5(token.encode()).hexdigest(), 16) % (2**23)
@@ -174,7 +113,6 @@ def _sparse_vector(text: str) -> tuple[list[int], list[float]]:
 
 
 def _parse_date(iso: str | None) -> date | None:
-    """Parse an ISO-8601 date string (``"2016-10-01"``) to a :class:`date` object."""
     if iso is None:
         return None
     try:
@@ -184,30 +122,11 @@ def _parse_date(iso: str | None) -> date | None:
 
 
 # ---------------------------------------------------------------------------
-# Embedding helper
-# ---------------------------------------------------------------------------
-
-
-async def _embed(texts: list[str]) -> list[list[float]]:
-    """Call the configured OpenAI-compatible embeddings endpoint for *texts*."""
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            f"{settings.embedding_base_url}/embeddings",
-            headers={"Authorization": f"Bearer {settings.embedding_api_key}"},
-            json={"model": settings.embedding_model, "input": texts},
-        )
-        resp.raise_for_status()
-    data: list[dict[str, Any]] = resp.json()["data"]
-    # Sort by index to preserve input order
-    data.sort(key=lambda x: x["index"])
-    return [item["embedding"] for item in data]
-
-
-# ---------------------------------------------------------------------------
-# Qdrant client singleton
+# Singletons
 # ---------------------------------------------------------------------------
 
 _QDRANT: Any = None
+_OPENAI: Any = None
 
 
 def _get_qdrant() -> Any:
@@ -223,27 +142,78 @@ def _get_qdrant() -> Any:
     return _QDRANT
 
 
+def _get_openai() -> Any:
+    global _OPENAI  # noqa: PLW0603
+    if _OPENAI is None:
+        from openai import AsyncOpenAI  # noqa: PLC0415
+
+        _OPENAI = AsyncOpenAI(
+            base_url=settings.embedding_base_url,
+            api_key=settings.embedding_api_key,
+        )
+    return _OPENAI
+
+
 # ---------------------------------------------------------------------------
-# Vector store client
+# Embedding helper — OpenAI SDK with exponential-backoff retry
+# ---------------------------------------------------------------------------
+
+
+_EMBED_BATCH_MAX = 25
+
+
+async def _embed_batch(texts: list[str], retries: int = 3) -> list[list[float]]:
+    """Embed a single batch (≤ _EMBED_BATCH_MAX) with retry."""
+    client = _get_openai()
+    last_exc: Exception | None = None
+
+    for attempt in range(retries):
+        try:
+            response = await client.embeddings.create(
+                model=settings.embedding_model,
+                input=texts,
+            )
+            return [item.embedding for item in response.data]
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries - 1:
+                wait = 2**attempt
+                logger.warning(
+                    "embed attempt %d/%d failed (%s) — retrying in %ds",
+                    attempt + 1, retries, exc, wait,
+                )
+                await asyncio.sleep(wait)
+
+    raise RuntimeError(f"Embedding failed after {retries} attempts") from last_exc
+
+
+async def _embed(texts: list[str]) -> list[list[float]]:
+    """Embed *texts*, splitting into provider-safe sub-batches automatically."""
+    results: list[list[float]] = []
+    for i in range(0, len(texts), _EMBED_BATCH_MAX):
+        results.extend(await _embed_batch(texts[i : i + _EMBED_BATCH_MAX]))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Vector store
 # ---------------------------------------------------------------------------
 
 
 class LegalVectorStore:
-    """Async Qdrant client for the Hammurabi legal vector store.
-
-    Collections are created lazily on first upsert; no manual setup required
-    beyond having Qdrant running.
-    """
+    """Async Qdrant client for the Hammurabi legal vector store."""
 
     def __init__(self) -> None:
         self._initialised: set[str] = set()
 
     async def close(self) -> None:
-        """Close the shared Qdrant client."""
-        global _QDRANT  # noqa: PLW0603
+        global _QDRANT, _OPENAI  # noqa: PLW0603
         if _QDRANT is not None:
             await _QDRANT.close()
             _QDRANT = None
+        if _OPENAI is not None:
+            await _OPENAI.close()
+            _OPENAI = None
         self._initialised.clear()
 
     # ------------------------------------------------------------------
@@ -251,7 +221,11 @@ class LegalVectorStore:
     # ------------------------------------------------------------------
 
     async def _ensure_collection(self, name: str) -> None:
-        """Create *name* collection with dense + sparse vector spaces if absent."""
+        """Create *name* with dense + sparse vector spaces if absent.
+
+        Raises :class:`ValueError` if the collection exists with a mismatched
+        dense vector dimension — prevents silent garbage results.
+        """
         if name in self._initialised:
             return
 
@@ -264,7 +238,17 @@ class LegalVectorStore:
 
         client = _get_qdrant()
         existing = {c.name for c in (await client.get_collections()).collections}
-        if name not in existing:
+
+        if name in existing:
+            info = await client.get_collection(name)
+            existing_size = info.config.params.vectors["dense"].size  # type: ignore[index]
+            if existing_size != settings.embedding_dim:
+                raise ValueError(
+                    f"Collection '{name}' exists with dense size {existing_size} but "
+                    f"EMBEDDING_DIM={settings.embedding_dim}. Drop the collection or "
+                    "update EMBEDDING_DIM to match."
+                )
+        else:
             await client.create_collection(
                 collection_name=name,
                 vectors_config={
@@ -277,6 +261,7 @@ class LegalVectorStore:
                     "sparse": SparseVectorParams(index=SparseIndexParams(on_disk=False))
                 },
             )
+
         self._initialised.add(name)
 
     # ------------------------------------------------------------------
@@ -289,16 +274,12 @@ class LegalVectorStore:
         corpus_id: str,
         batch_size: int = 32,
     ) -> int:
-        """Embed and upsert *chunks* into the appropriate Qdrant collections.
-
-        Returns the number of points upserted.
-        """
+        """Embed and upsert *chunks* into the appropriate Qdrant collections."""
         from qdrant_client.http.models import PointStruct, SparseVector  # noqa: PLC0415
 
         if not chunks:
             return 0
 
-        # Group chunks by target collection
         by_collection: dict[str, list[LegalChunk]] = {}
         for chunk in chunks:
             col = _collection_for_chunk(chunk)
@@ -309,7 +290,6 @@ class LegalVectorStore:
             await self._ensure_collection(collection)
             client = _get_qdrant()
 
-            # Process in batches to respect memory / API limits
             for i in range(0, len(col_chunks), batch_size):
                 batch = col_chunks[i : i + batch_size]
                 embeddings = await _embed([c.text for c in batch])
@@ -331,15 +311,9 @@ class LegalVectorStore:
                         **{
                             k: v
                             for k, v in chunk.metadata.items()
-                            if k
-                            in {
-                                "heading",
-                                "segment_type",
-                                "court",
-                                "date",
-                                "docket",
-                                "parties",
-                                "page_number",
+                            if k in {
+                                "heading", "segment_type", "court", "date",
+                                "docket", "parties", "page_number",
                             }
                         },
                     }
@@ -378,25 +352,7 @@ class LegalVectorStore:
         top_k: int = 10,
         collections: list[str] | None = None,
     ) -> list[SearchResult]:
-        """Hybrid dense + sparse search with RRF merging across collections.
-
-        Parameters
-        ----------
-        query:
-            Natural-language search query.
-        jurisdiction:
-            ISO jurisdiction filter (e.g. ``"FR"``).
-        source_type:
-            Payload ``source_type`` filter (e.g. ``"xml"``).
-        tags:
-            At least one tag must be present in the chunk's tag list.
-        effective_date_from / effective_date_to:
-            ISO-8601 date strings for date-range filtering on ``effective_date``.
-        top_k:
-            Number of results to return per collection.
-        collections:
-            Explicit list of collection names to search; defaults to all three.
-        """
+        """Hybrid dense + sparse search with server-side RRF across collections."""
         from qdrant_client.http.models import (  # noqa: PLC0415
             DatetimeRange,
             FieldCondition,
@@ -414,11 +370,9 @@ class LegalVectorStore:
             COLLECTION_DOCUMENTS,
         ]
 
-        # Embed query
         dense_vec = (await _embed([query]))[0]
         sp_indices, sp_values = _sparse_vector(query)
 
-        # Build filter
         must_conditions: list[Any] = []
         if jurisdiction:
             must_conditions.append(
@@ -453,16 +407,9 @@ class LegalVectorStore:
             response = await client.query_points(
                 collection_name=collection,
                 prefetch=[
+                    Prefetch(query=dense_vec, using="dense", limit=top_k * 2),
                     Prefetch(
-                        query=dense_vec,
-                        using="dense",
-                        limit=top_k * 2,
-                    ),
-                    Prefetch(
-                        query=SparseVector(
-                            indices=sp_indices,
-                            values=sp_values,
-                        ),
+                        query=SparseVector(indices=sp_indices, values=sp_values),
                         using="sparse",
                         limit=top_k * 2,
                     ),
@@ -488,7 +435,6 @@ class LegalVectorStore:
                     )
                 )
 
-        # Re-rank across collections by score (descending)
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:top_k]
 

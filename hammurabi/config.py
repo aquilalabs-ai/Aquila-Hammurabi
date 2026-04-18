@@ -81,6 +81,16 @@ class Settings(BaseSettings):
     )
     debug: bool = Field(default=False, description="Enable debug logging and reload.")
 
+    # ── Légifrance / PISTE API (optional corpus seeding) ─────────────────────
+    piste_client_id: str | None = Field(
+        default=None,
+        description="OAuth2 client_id from developer.piste.gouv.fr",
+    )
+    piste_client_secret: str | None = Field(
+        default=None,
+        description="OAuth2 client_secret from developer.piste.gouv.fr",
+    )
+
     # ── LangSmith (optional tracing) ──────────────────────────────────────────
     langsmith_api_key: str | None = Field(
         default=None, description="LangSmith API key for tracing and evaluation."

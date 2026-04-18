@@ -236,6 +236,10 @@ class LegalKnowledgeService:
     # Graph retrieval
     # ------------------------------------------------------------------
 
+    async def search_article_ids(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Substring search on article IDs — used for autocomplete."""
+        return await self._graph.search_article_ids(q, limit=limit)
+
     async def get_article(self, article_id: str) -> ArticleContext | None:
         """Retrieve full article context: node properties + amendments + cases + citing articles.
 
