@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { PenLine, Sparkles, Copy, Check, X } from "lucide-react";
+import { PenLine, Sparkles, Copy, Check, X, Download } from "lucide-react";
 import { post } from "../../api/client";
 import { useAppStore } from "../../store/app";
 import { Button } from "../../components/ui/Button";
@@ -41,6 +41,17 @@ export function DraftingPanel() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
+  };
+
+  const handleExport = () => {
+    if (!result) return;
+    const blob = new Blob([result.content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `draft-${templateType}-${jurisdiction.toLowerCase()}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -106,13 +117,18 @@ export function DraftingPanel() {
           <Card>
             <div className="flex items-center justify-between mb-2">
               <CardTitle className="mb-0">Generated Draft</CardTitle>
-              <Button size="sm" variant="ghost" onClick={handleCopy}>
-                {copied ? (
-                  <Check className="h-3.5 w-3.5 text-green-400" />
-                ) : (
-                  <Copy className="h-3.5 w-3.5" />
-                )}
-              </Button>
+              <div className="flex items-center gap-1">
+                <Button size="sm" variant="ghost" onClick={handleExport} title="Download as .txt">
+                  <Download className="h-3.5 w-3.5" />
+                </Button>
+                <Button size="sm" variant="ghost" onClick={handleCopy} title="Copy to clipboard">
+                  {copied ? (
+                    <Check className="h-3.5 w-3.5 text-green-400" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </div>
             </div>
             <Textarea
               value={result.content}

@@ -190,7 +190,10 @@ async def reasoning_node(state: AgentState, llm_with_tools: Any) -> dict[str, An
 
     # Routes that start with no KB context and drive retrieval entirely through tools —
     # injecting the empty-context gate here would conflict with their skill prompts.
-    _TOOL_DRIVEN_ROUTES = {"report", "drafting", "learning"}
+    _TOOL_DRIVEN_ROUTES = {
+        "report", "report_problematic", "report_plan", "report_critique", "report_coherence",
+        "drafting", "learning",
+    }
 
     # Empty-context gate — only for the very first message of a session.
     if (
@@ -397,6 +400,7 @@ class IRACAgent:
     ) -> str:
         """Run a single query through the agent and return the final response."""
         from hammurabi.reasoning.session import load_messages, save_messages
+        print("invoke: loading session : ", session_id)
 
         jur = jurisdiction or settings.default_jurisdiction
         stored = await load_messages(session_id)
@@ -427,6 +431,44 @@ class IRACAgent:
         await save_messages(session_id, _serialise_messages(all_messages))
 
         return response
+
+    async def invoke_with_sources(
+        self,
+        query: str,
+        *,
+        session_id: str = "default",
+        jurisdiction: str | None = None,
+        document_text: str = "",
+        force_route: str = "",
+    ) -> tuple[str, list[BaseMessage]]:
+        """Like invoke() but also returns the full message list for source extraction."""
+        from hammurabi.reasoning.session import load_messages, save_messages
+        print("invoke_with_sources: loading session : ", session_id)
+        jur = jurisdiction or settings.default_jurisdiction
+        stored = await load_messages(session_id)
+        prior_messages = _deserialise_messages(stored)
+        initial_messages = [*prior_messages, HumanMessage(content=query)]
+
+        initial_state: AgentState = {
+            "session_id": session_id,
+            "query": query,
+            "jurisdiction": jur,
+            "document_text": document_text,
+            "route": "direct",
+            "force_route": force_route,
+            "skill_prompt": "",
+            "messages": initial_messages,
+            "tool_call_count": 0,
+            "retrieved_context": "",
+            "formatted_response": "",
+        }
+
+        final_state: dict[str, Any] = await self._graph.ainvoke(initial_state)
+        response: str = final_state.get("formatted_response", "")
+        all_messages: list[BaseMessage] = final_state.get("messages", [])
+
+        await save_messages(session_id, _serialise_messages(all_messages))
+        return response, all_messages
 
     async def stream(
         self,

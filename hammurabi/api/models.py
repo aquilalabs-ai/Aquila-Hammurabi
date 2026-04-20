@@ -274,16 +274,27 @@ class ReportCoherenceRequest(BaseModel):
     session_id: str | None = None
 
 
+class ReportSourceItem(BaseModel):
+    type: str  # "web" | "kb"
+    title: str
+    article_id: str | None = None   # KB only
+    url: str | None = None          # web only
+    publication: str | None = None  # web only (site name)
+    date: str | None = None         # web only
+    excerpt: str | None = None      # KB: article text snippet
+
+
 class ReportResponse(BaseModel):
     session_id: str
     response: str
+    sources: list[ReportSourceItem] = []
 
 
 # ── Graph ─────────────────────────────────────────────────────────────────────
 
 
 class GraphData(BaseModel):
-    corpus_id: str
+    corpus_id: str | None = None
     nodes: list[dict[str, Any]]
     edges: list[dict[str, Any]]
 

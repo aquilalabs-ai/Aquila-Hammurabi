@@ -45,6 +45,20 @@ export function useArticleAutocomplete(q: string) {
   });
 }
 
+interface BackendSearchResponse {
+  query: string;
+  total: number;
+  results: Array<{
+    text: string;
+    score: number;
+    source_type: string;
+    jurisdiction: string;
+    article_id: string | null;
+    case_id: string | null;
+    tags: string[];
+  }>;
+}
+
 export function useSearch(
   query: string,
   jurisdiction?: string,
@@ -55,7 +69,19 @@ export function useSearch(
   if (sourceType) params.set("source_type", sourceType);
   return useQuery({
     queryKey: ["search", query, jurisdiction, sourceType],
-    queryFn: () => get<SearchResult[]>(`/search?${params.toString()}`),
+    queryFn: async (): Promise<SearchResult[]> => {
+      const resp = await get<BackendSearchResponse>(`/search?${params.toString()}`);
+      return resp.results.map((r, i) => ({
+        chunk_id: r.article_id ?? r.case_id ?? String(i),
+        source_type: r.source_type,
+        article_id: r.article_id,
+        case_id: r.case_id,
+        jurisdiction: r.jurisdiction,
+        content: r.text,
+        score: r.score,
+        tags: r.tags,
+      }));
+    },
     enabled: query.length > 2,
     staleTime: 30_000,
   });
@@ -67,5 +93,13 @@ export function useCorpusGraph(corpusId: string | null) {
     queryFn: () => get<GraphData>(`/corpus/${corpusId}/graph`),
     enabled: !!corpusId,
     staleTime: 60_000,
+  });
+}
+
+export function useGlobalGraph() {
+  return useQuery({
+    queryKey: ["graph", "global"],
+    queryFn: () => get<GraphData>("/graph"),
+    staleTime: 5 * 60_000,
   });
 }

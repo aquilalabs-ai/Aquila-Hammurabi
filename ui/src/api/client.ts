@@ -90,7 +90,12 @@ export function sseStream(
     }
     onDone();
   })().catch((err: unknown) => {
-    if (err instanceof Error && err.name !== "AbortError") onError(err.message);
+    if (err instanceof Error && err.name === "AbortError") {
+      // Stream was cancelled — finalise cleanly so callers reset their state.
+      onDone();
+    } else if (err instanceof Error) {
+      onError(err.message);
+    }
   });
 
   return () => controller.abort();

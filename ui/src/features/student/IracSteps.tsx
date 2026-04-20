@@ -1,6 +1,5 @@
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Md } from "../../components/ui/Markdown";
 import { BookOpen, FileText, Gavel, CheckCircle2, ChevronRight } from "lucide-react";
 import { cn } from "../../components/ui/cn";
 import { Button } from "../../components/ui/Button";
@@ -46,47 +45,6 @@ export const IRAC_STEPS: {
   },
 ];
 
-const MD_COMPONENTS: React.ComponentProps<typeof ReactMarkdown>["components"] = {
-  h1: ({ children }) => <h1 className="text-base font-bold text-slate-200 mb-2 mt-3">{children}</h1>,
-  h2: ({ children }) => <h2 className="text-sm font-bold text-slate-200 mb-1.5 mt-2.5">{children}</h2>,
-  h3: ({ children }) => <h3 className="text-sm font-semibold text-slate-300 mb-1 mt-2">{children}</h3>,
-  p: ({ children }) => <p className="mb-2 leading-relaxed">{children}</p>,
-  ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-0.5">{children}</ul>,
-  ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-0.5">{children}</ol>,
-  li: ({ children }) => <li className="text-slate-300">{children}</li>,
-  strong: ({ children }) => <strong className="font-semibold text-slate-200">{children}</strong>,
-  em: ({ children }) => <em className="italic text-slate-300">{children}</em>,
-  code: ({ children }) => (
-    <code className="bg-slate-800 text-amber-300 rounded px-1 py-0.5 text-xs font-mono">
-      {children}
-    </code>
-  ),
-  pre: ({ children }) => (
-    <pre className="bg-slate-800 rounded-lg p-3 mb-2 overflow-x-auto text-xs font-mono">
-      {children}
-    </pre>
-  ),
-  blockquote: ({ children }) => (
-    <blockquote className="border-l-2 border-slate-600 pl-3 italic text-slate-400 mb-2">
-      {children}
-    </blockquote>
-  ),
-  table: ({ children }) => (
-    <div className="overflow-x-auto mb-2">
-      <table className="w-full text-xs border-collapse">{children}</table>
-    </div>
-  ),
-  thead: ({ children }) => <thead className="bg-slate-800">{children}</thead>,
-  th: ({ children }) => (
-    <th className="border border-slate-600 px-2 py-1 text-left font-semibold text-slate-200">
-      {children}
-    </th>
-  ),
-  td: ({ children }) => (
-    <td className="border border-slate-700 px-2 py-1 text-slate-300">{children}</td>
-  ),
-  hr: () => <hr className="border-slate-700 my-3" />,
-};
 
 interface IracStepsProps {
   /** Parsed IRAC sections. Pass null while still streaming. */
@@ -142,9 +100,7 @@ export function IracSteps({ irac, streamText = "", loading = false }: IracStepsP
                 <span>Reasoning…</span>
               </div>
             ) : (
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
-                {irac?.[step.key] ?? streamText}
-              </ReactMarkdown>
+              <Md>{irac?.[step.key] ?? streamText}</Md>
             )}
 
             <div className="flex gap-2 mt-3">

@@ -185,9 +185,12 @@ export interface DraftRequest {
 }
 
 export interface DraftResponse {
-  doc_id: string;
+  id: string;
   content: string;
+  prompt: string;
   jurisdiction: string;
+  template_type: string;
+  created_at: string;
 }
 
 export interface DraftImproveRequest {
@@ -292,9 +295,20 @@ export interface ProgressData {
 }
 
 // Report Assistant (student mode)
+export interface ReportSourceItem {
+  type: "web" | "kb";
+  title: string;
+  article_id?: string;   // kb only
+  url?: string;          // web only
+  publication?: string;  // web only
+  date?: string;         // web only
+  excerpt?: string;      // kb only
+}
+
 export interface ReportResponse {
   session_id: string;
   response: string;
+  sources?: ReportSourceItem[];
 }
 
 // SSE event

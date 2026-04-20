@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Send, ChevronDown, ChevronRight, BookOpen, Gavel, FileText, CheckCircle2 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Md } from "../../components/ui/Markdown";
 import { sseStream } from "../../api/client";
 import {
   useSessionMessages,
   useGlobalSessionMessages,
   useCreateGlobalSession,
+  globalSessionKeys,
 } from "../../api/hooks/useCorpus";
 import { useAppStore } from "../../store/app";
 import type { StoredMessage } from "../../types/api";
@@ -17,25 +18,6 @@ import { cn } from "../../components/ui/cn";
 import { Spinner } from "../../components/ui/Spinner";
 import type { IracResponse, Citation } from "../../types/api";
 
-const mdComponents: React.ComponentProps<typeof ReactMarkdown>["components"] = {
-  h1: ({ children }) => <h1 className="text-base font-bold text-slate-200 mb-2 mt-3">{children}</h1>,
-  h2: ({ children }) => <h2 className="text-sm font-bold text-slate-200 mb-1.5 mt-2.5">{children}</h2>,
-  h3: ({ children }) => <h3 className="text-sm font-semibold text-slate-300 mb-1 mt-2">{children}</h3>,
-  p: ({ children }) => <p className="mb-2 leading-relaxed last:mb-0">{children}</p>,
-  ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-0.5">{children}</ul>,
-  ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-0.5">{children}</ol>,
-  li: ({ children }) => <li className="text-slate-300">{children}</li>,
-  strong: ({ children }) => <strong className="font-semibold text-slate-200">{children}</strong>,
-  em: ({ children }) => <em className="italic text-slate-300">{children}</em>,
-  code: ({ children }) => <code className="bg-slate-900 text-amber-300 rounded px-1 py-0.5 text-xs font-mono">{children}</code>,
-  pre: ({ children }) => <pre className="bg-slate-900 rounded-lg p-3 mb-2 overflow-x-auto text-xs font-mono">{children}</pre>,
-  blockquote: ({ children }) => <blockquote className="border-l-2 border-slate-600 pl-3 italic text-slate-400 mb-2">{children}</blockquote>,
-  table: ({ children }) => <div className="overflow-x-auto mb-2"><table className="w-full text-xs border-collapse">{children}</table></div>,
-  thead: ({ children }) => <thead className="bg-slate-900">{children}</thead>,
-  th: ({ children }) => <th className="border border-slate-600 px-2 py-1 text-left font-semibold text-slate-200">{children}</th>,
-  td: ({ children }) => <td className="border border-slate-700 px-2 py-1 text-slate-300">{children}</td>,
-  hr: () => <hr className="border-slate-700 my-3" />,
-};
 
 interface Message {
   id: string;
@@ -46,25 +28,31 @@ interface Message {
 }
 
 function toMessages(stored: StoredMessage[]): Message[] {
-  return stored.map((m) => {
-    const role = m.role === "human" ? "user" : "assistant";
-    const content = m.content;
-    return {
-      id: crypto.randomUUID(),
-      role,
-      content,
-      irac: role === "assistant" ? tryParseIrac(content) : undefined,
-    };
-  });
+  return stored
+    .filter((m) => m.content.trim() !== "")
+    .map((m) => {
+      const role = m.role === "human" ? "user" : "assistant";
+      const content = m.content;
+      return {
+        id: crypto.randomUUID(),
+        role,
+        content,
+        irac: role === "assistant" ? tryParseIrac(content) : undefined,
+      };
+    });
 }
 
 export function ChatPanel() {
   const { activeCorpusId, activeSessionId, setActiveSession } = useAppStore();
+  const qc = useQueryClient();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<(() => void) | null>(null);
+  // Synchronous lock — prevents double-send when the user holds Enter or
+  // double-clicks before React has committed the streaming=true state update.
+  const submittingRef = useRef(false);
 
   const isGlobal = !activeCorpusId;
 
@@ -77,31 +65,41 @@ export function ChatPanel() {
   // Auto-create global session on first send
   const createGlobalSession = useCreateGlobalSession();
 
-  // Load messages whenever the active session changes
+  // Sync local messages with the server state whenever the active session or its
+  // data changes.  A single effect avoids the race where a second effect fires
+  // after the first and clears messages that were just populated from the cache
+  // (which would never re-trigger with staleTime: Infinity).
   useEffect(() => {
     const stored: StoredMessage[] | undefined = isGlobal ? globalMessages : corpusMessages;
-    if (stored === undefined) return;
-    setMessages(toMessages(stored));
-  }, [activeSessionId, corpusMessages, globalMessages, isGlobal]);
-
-  // Clear messages when switching sessions or corpus
-  useEffect(() => {
-    setMessages([]);
-  }, [activeSessionId, activeCorpusId]);
+    if (stored === undefined) {
+      setMessages([]);
+    } else {
+      setMessages(toMessages(stored));
+    }
+  }, [activeSessionId, activeCorpusId, corpusMessages, globalMessages, isGlobal]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   const send = useCallback(async () => {
-    if (!input.trim() || streaming) return;
+    if (!input.trim() || submittingRef.current) return;
+    submittingRef.current = true;
 
-    // Auto-create a global session if none is selected
+    // Resolve (or create) the session ID without updating the store yet.
+    // Calling setActiveSession before the stream starts would trigger the sync
+    // effect which clears local messages, wiping the optimistic UI.
     let sessionId = activeSessionId;
+    let pendingSessionId: string | null = null;
     if (isGlobal && !sessionId) {
-      const session = await createGlobalSession.mutateAsync(undefined);
-      setActiveSession(session.session_id);
-      sessionId = session.session_id;
+      try {
+        const session = await createGlobalSession.mutateAsync(undefined);
+        sessionId = session.session_id;
+        pendingSessionId = session.session_id;
+      } catch {
+        // Session creation failed — proceed without one; the backend will
+        // generate a random ID and chat still works without persistence.
+      }
     }
 
     const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: input };
@@ -116,6 +114,26 @@ export function ChatPanel() {
 
     const endpoint = activeCorpusId ? `/corpus/${activeCorpusId}/chat` : "/chat";
     let acc = "";
+
+    // 3-minute safety valve — aborts the stream and resets state if the
+    // backend never sends [DONE] (e.g. LLM timeout, network drop).
+    const streamTimeout = setTimeout(() => {
+      cancelRef.current?.();
+    }, 3 * 60_000);
+
+    const finalize = (resolvedId: string | null, pendingId: string | null) => {
+      clearTimeout(streamTimeout);
+      submittingRef.current = false;
+      if (resolvedId) {
+        if (activeCorpusId) {
+          qc.invalidateQueries({ queryKey: ["session-messages", activeCorpusId, resolvedId] });
+        } else {
+          qc.invalidateQueries({ queryKey: globalSessionKeys.messages(resolvedId) });
+        }
+      }
+      if (pendingId) setActiveSession(pendingId);
+    };
+
     cancelRef.current = sseStream(
       endpoint,
       { message: input, session_id: sessionId, stream: true },
@@ -135,6 +153,7 @@ export function ChatPanel() {
           ),
         );
         setStreaming(false);
+        finalize(pendingSessionId ?? sessionId, pendingSessionId);
       },
       (err) => {
         setMessages((m) =>
@@ -145,9 +164,10 @@ export function ChatPanel() {
           ),
         );
         setStreaming(false);
+        finalize(pendingSessionId ?? sessionId, pendingSessionId);
       },
     );
-  }, [input, activeCorpusId, activeSessionId, isGlobal, streaming, createGlobalSession, setActiveSession]);
+  }, [input, activeCorpusId, activeSessionId, isGlobal, streaming, createGlobalSession, setActiveSession, qc]);
 
   return (
     <div className="flex flex-col h-full">
@@ -222,9 +242,7 @@ function AssistantMessage({ msg }: { msg: Message }) {
         {msg.streaming && msg.content === "" ? (
           <Spinner className="h-4 w-4" />
         ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-            {msg.content}
-          </ReactMarkdown>
+          <Md>{msg.content}</Md>
         )}
         {msg.streaming && msg.content !== "" && (
           <span className="inline-block w-1.5 h-4 bg-gold-400 animate-pulse ml-0.5 align-middle" />
@@ -279,7 +297,7 @@ function IracSection({
       </button>
       {open && (
         <div className="px-3 pb-3 pt-1 text-sm text-slate-300">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{content}</ReactMarkdown>
+          <Md>{content}</Md>
           {citations && citations.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {citations.map((c) => (

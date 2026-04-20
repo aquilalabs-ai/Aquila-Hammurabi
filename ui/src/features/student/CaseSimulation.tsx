@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Scale, Eye, EyeOff, RefreshCw, Play, Wand2 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Md } from "../../components/ui/Markdown";
 import { post, sseStream } from "../../api/client";
 import { useAppStore } from "../../store/app";
 import { Button } from "../../components/ui/Button";
@@ -191,9 +190,7 @@ export function CaseSimulation() {
               <CardTitle className="mb-0">Case Scenario</CardTitle>
               <Badge className="ml-auto capitalize">{generatedCase.difficulty}</Badge>
             </div>
-            <div className="text-sm text-slate-300 leading-relaxed prose prose-invert prose-sm max-w-none">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{generatedCase.scenario}</ReactMarkdown>
-            </div>
+            <Md>{generatedCase.scenario}</Md>
             {generatedCase.relevant_articles.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-1.5">
                 <span className="text-xs text-slate-500 mr-1">Hint:</span>

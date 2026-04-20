@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { LightbulbIcon, BookOpen, Link2, RefreshCw, AlertCircle, Search } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Md } from "../../components/ui/Markdown";
 import { post } from "../../api/client";
 import { useAppStore } from "../../store/app";
 import { useArticleAutocomplete } from "../../api/hooks/useResearch";
@@ -192,9 +191,7 @@ export function ConceptCards() {
             <AlertCircle className="h-4 w-4 text-amber-400 shrink-0" />
             <CardTitle className="mb-0 text-amber-400">Article not found as concept card</CardTitle>
           </div>
-          <div className="text-sm text-slate-300 leading-relaxed prose prose-invert prose-sm max-w-none">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{fallbackText}</ReactMarkdown>
-          </div>
+          <Md>{fallbackText}</Md>
         </Card>
       )}
     </div>

@@ -7,6 +7,7 @@ import {
   ShieldAlert,
   Settings2,
   GraduationCap,
+  Database,
 } from "lucide-react";
 import { ConceptCards } from "./ConceptCards";
 import { IRACWalkthrough } from "./IRACWalkthrough";
@@ -16,6 +17,7 @@ import { ProgressTracker } from "./ProgressTracker";
 import { SimplifiedRiskReport } from "./SimplifiedRiskReport";
 import { ToneControl } from "./ToneControl";
 import { ReportAssistant } from "./ReportAssistant";
+import { useAppStore } from "../../store/app";
 import { cn } from "../../components/ui/cn";
 
 type StudentTab = "concepts" | "irac" | "quiz" | "simulation" | "report" | "progress" | "risk" | "settings";
@@ -31,8 +33,12 @@ const TABS: { key: StudentTab; label: string; icon: React.ReactNode }[] = [
   { key: "settings", label: "Tone", icon: <Settings2 className="h-3.5 w-3.5" /> },
 ];
 
+const CORPUS_DEPENDENT_TABS: StudentTab[] = ["concepts", "irac", "quiz", "simulation", "risk"];
+
 export function StudentMode() {
   const [tab, setTab] = useState<StudentTab>("concepts");
+  const { activeCorpusId } = useAppStore();
+  const needsCorpus = CORPUS_DEPENDENT_TABS.includes(tab);
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -54,6 +60,14 @@ export function StudentMode() {
           </button>
         ))}
       </div>
+
+      {/* No corpus warning */}
+      {needsCorpus && !activeCorpusId && (
+        <div className="flex items-center gap-2.5 border-b border-amber-700/40 bg-amber-900/20 px-4 py-2.5 text-xs text-amber-300">
+          <Database className="h-3.5 w-3.5 shrink-0" />
+          Select a corpus from the left sidebar to use this module.
+        </div>
+      )}
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto p-4 max-w-2xl mx-auto w-full">

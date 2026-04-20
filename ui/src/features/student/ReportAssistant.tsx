@@ -1,14 +1,13 @@
 import { useState } from "react";
-import { FileText, MessageSquare, GitMerge, Wand2, Download, ArrowRight, RotateCcw } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { FileText, MessageSquare, GitMerge, Wand2, Download, ArrowRight, RotateCcw, BookMarked, X, Globe, Database } from "lucide-react";
+import { Md } from "../../components/ui/Markdown";
 import { post } from "../../api/client";
 import { Button } from "../../components/ui/Button";
 import { Input, Textarea } from "../../components/ui/Input";
 import { Card, CardTitle } from "../../components/ui/Card";
 import { Spinner } from "../../components/ui/Spinner";
 import { cn } from "../../components/ui/cn";
-import type { ReportResponse } from "../../types/api";
+import type { ReportResponse, ReportSourceItem } from "../../types/api";
 
 type ReportTab = "plan" | "critique" | "coherence";
 type PlanStep = "topic" | "problematic" | "plan";
@@ -54,6 +53,8 @@ export function ReportAssistant() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [studyLevel, setStudyLevel] = useState<StudyLevel>("master");
+  const [sources, setSources] = useState<ReportSourceItem[]>([]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   // ── Plan tab — three-step state ───────────────────────────────────────────
   const [planStep, setPlanStep] = useState<PlanStep>("topic");
@@ -81,6 +82,8 @@ export function ReportAssistant() {
   // ── Helpers ───────────────────────────────────────────────────────────────
   const clearTab = (t: ReportTab) => {
     setError(null);
+    setSources([]);
+    setDrawerOpen(false);
     if (t === "plan") {
       setPlanStep("topic");
       setProblematicSuggestions(null);
@@ -128,6 +131,7 @@ export function ReportAssistant() {
       });
       setProblematicSuggestions(data.response);
       setPlanSessionId(data.session_id);
+      setSources(data.sources ?? []);
       setPlanStep("problematic");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
@@ -151,6 +155,16 @@ export function ReportAssistant() {
         session_id: planSessionId,
       });
       setPlanResult(data.response);
+      setSources((prev) => {
+        const merged = [...prev];
+        for (const s of data.sources ?? []) {
+          const dup = s.type === "web"
+            ? merged.some((x) => x.url === s.url)
+            : merged.some((x) => x.article_id === s.article_id);
+          if (!dup) merged.push(s);
+        }
+        return merged;
+      });
       setPlanStep("plan");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
@@ -172,6 +186,7 @@ export function ReportAssistant() {
           study_level: critiqueLevel,
         });
         setCritiqueResult(data.response);
+        setSources(data.sources ?? []);
       } else {
         setCoherenceResult(null);
         const data = await post<ReportResponse>("/report/coherence", {
@@ -179,6 +194,7 @@ export function ReportAssistant() {
           topic: coherenceTopic.trim() || undefined,
         });
         setCoherenceResult(data.response);
+        setSources(data.sources ?? []);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
@@ -189,6 +205,8 @@ export function ReportAssistant() {
 
   return (
     <div className="space-y-4">
+      <SourcesDrawer sources={sources} open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+
       {/* Tab bar */}
       <div className="flex gap-0.5 rounded-lg bg-slate-800/60 p-0.5">
         {TABS.map((t) => (
@@ -296,10 +314,8 @@ export function ReportAssistant() {
               </CardTitle>
 
               {/* AI suggestions */}
-              <div className="mb-4 rounded-md bg-slate-800/50 p-3 prose prose-invert prose-sm max-w-none
-                prose-headings:text-slate-200 prose-headings:text-sm prose-strong:text-slate-200
-                prose-li:text-slate-300">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{problematicSuggestions}</ReactMarkdown>
+              <div className="mb-2 rounded-md bg-slate-800/50 p-3">
+                <Md preprocessFn={preprocessMarkdown}>{problematicSuggestions}</Md>
               </div>
 
               {planStep === "problematic" && (
@@ -352,11 +368,19 @@ export function ReportAssistant() {
             <Card>
               <div className="mb-3 flex items-center justify-between">
                 <CardTitle className="mb-0">Your Plan</CardTitle>
-                <Button size="sm" variant="secondary" onClick={exportTxt}>
-                  <Download className="h-3.5 w-3.5" />Export .txt
-                </Button>
+                <div className="flex items-center gap-2">
+                  {sources.length > 0 && (
+                    <Button size="sm" variant="ghost" onClick={() => setDrawerOpen(true)}>
+                      <BookMarked className="h-3.5 w-3.5 text-amber-400" />
+                      {sources.length} sources
+                    </Button>
+                  )}
+                  <Button size="sm" variant="secondary" onClick={exportTxt}>
+                    <Download className="h-3.5 w-3.5" />Export .txt
+                  </Button>
+                </div>
               </div>
-              <Markdown>{planResult}</Markdown>
+              <Md preprocessFn={preprocessMarkdown}>{planResult}</Md>
             </Card>
           )}
         </>
@@ -408,11 +432,19 @@ export function ReportAssistant() {
             <Card>
               <div className="mb-3 flex items-center justify-between">
                 <CardTitle className="mb-0">Critique</CardTitle>
-                <Button size="sm" variant="secondary" onClick={exportTxt}>
-                  <Download className="h-3.5 w-3.5" />Export .txt
-                </Button>
+                <div className="flex items-center gap-2">
+                  {sources.length > 0 && (
+                    <Button size="sm" variant="ghost" onClick={() => setDrawerOpen(true)}>
+                      <BookMarked className="h-3.5 w-3.5 text-amber-400" />
+                      {sources.length} sources
+                    </Button>
+                  )}
+                  <Button size="sm" variant="secondary" onClick={exportTxt}>
+                    <Download className="h-3.5 w-3.5" />Export .txt
+                  </Button>
+                </div>
               </div>
-              <Markdown>{critiqueResult}</Markdown>
+              <Md preprocessFn={preprocessMarkdown}>{critiqueResult}</Md>
             </Card>
           )}
         </>
@@ -455,11 +487,19 @@ export function ReportAssistant() {
             <Card>
               <div className="mb-3 flex items-center justify-between">
                 <CardTitle className="mb-0">Coherence Analysis</CardTitle>
-                <Button size="sm" variant="secondary" onClick={exportTxt}>
-                  <Download className="h-3.5 w-3.5" />Export .txt
-                </Button>
+                <div className="flex items-center gap-2">
+                  {sources.length > 0 && (
+                    <Button size="sm" variant="ghost" onClick={() => setDrawerOpen(true)}>
+                      <BookMarked className="h-3.5 w-3.5 text-amber-400" />
+                      {sources.length} sources
+                    </Button>
+                  )}
+                  <Button size="sm" variant="secondary" onClick={exportTxt}>
+                    <Download className="h-3.5 w-3.5" />Export .txt
+                  </Button>
+                </div>
               </div>
-              <Markdown>{coherenceResult}</Markdown>
+              <Md preprocessFn={preprocessMarkdown}>{coherenceResult}</Md>
             </Card>
           )}
         </>
@@ -475,9 +515,107 @@ export function ReportAssistant() {
   );
 }
 
+// ── Sources drawer ────────────────────────────────────────────────────────────
+
+function SourcesDrawer({
+  sources,
+  open,
+  onClose,
+}: {
+  sources: ReportSourceItem[];
+  open: boolean;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+  const webSources = sources.filter((s) => s.type === "web");
+  const kbSources = sources.filter((s) => s.type === "kb");
+
+  return (
+    <div className="fixed inset-y-0 right-0 z-40 flex w-80 flex-col border-l border-slate-700 bg-slate-900 shadow-2xl">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-slate-700 px-4 py-3">
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-200">
+          <BookMarked className="h-4 w-4 text-amber-400" />
+          Sources <span className="text-slate-500 font-normal">({sources.length})</span>
+        </div>
+        <button onClick={onClose} className="text-slate-500 hover:text-slate-300">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-3 space-y-4">
+        {/* Web sources */}
+        {webSources.length > 0 && (
+          <section>
+            <h3 className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+              <Globe className="h-3.5 w-3.5" /> Sources web ({webSources.length})
+            </h3>
+            <ul className="space-y-2">
+              {webSources.map((s, i) => (
+                <li key={i} className="rounded-lg border border-slate-700 bg-slate-800/50 p-2.5">
+                  {s.url ? (
+                    <a
+                      href={s.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-amber-400 hover:underline text-xs font-medium leading-snug block mb-1"
+                    >
+                      {s.title}
+                    </a>
+                  ) : (
+                    <p className="text-xs font-medium text-slate-200 mb-1">{s.title}</p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-slate-500">
+                    {s.publication && <span>{s.publication}</span>}
+                    {s.publication && s.date && <span>·</span>}
+                    {s.date && <span>{s.date}</span>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {/* KB sources */}
+        {kbSources.length > 0 && (
+          <section>
+            <h3 className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+              <Database className="h-3.5 w-3.5" /> Base de connaissances ({kbSources.length})
+            </h3>
+            <ul className="space-y-2">
+              {kbSources.map((s, i) => (
+                <li key={i} className="rounded-lg border border-slate-700 bg-slate-800/50 p-2.5">
+                  <div className="flex items-start gap-2">
+                    <span className="text-xs font-mono text-gold-400 shrink-0 mt-0.5 leading-snug">
+                      {s.article_id}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-slate-200 leading-snug">{s.title}</p>
+                      {s.excerpt && (
+                        <p className="text-xs text-slate-500 mt-1 line-clamp-4 leading-relaxed">
+                          {s.excerpt}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {sources.length === 0 && (
+          <p className="text-xs text-slate-600 text-center pt-4">Aucune source disponible.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function preprocessMarkdown(text: string): string {
-  // 1. Convert HTML line breaks to markdown paragraph breaks
-  let md = text.replace(/<br\s*\/?>/gi, "\n\n");
+  // <br> tags are intentionally left as-is — rehype-raw renders them natively,
+  // which correctly handles <br> inside table cells without breaking the table.
+  let md = text;
 
   // 2. Extract numbered source entries of the form:
   //    **[N] Title**
@@ -506,23 +644,3 @@ function preprocessMarkdown(text: string): string {
   return md;
 }
 
-function Markdown({ children }: { children: string }) {
-  return (
-    <div className="prose prose-invert prose-sm max-w-none text-slate-200
-      prose-headings:text-slate-100 prose-headings:font-semibold
-      prose-strong:text-slate-100 prose-li:text-slate-300
-      prose-code:text-amber-300 prose-code:bg-slate-800 prose-code:px-1 prose-code:rounded
-      prose-a:text-amber-400 prose-a:no-underline hover:prose-a:underline">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ href, children: ch }) => (
-            <a href={href} target="_blank" rel="noopener noreferrer">{ch}</a>
-          ),
-        }}
-      >
-        {preprocessMarkdown(children)}
-      </ReactMarkdown>
-    </div>
-  );
-}

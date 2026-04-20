@@ -27,6 +27,24 @@ from hammurabi.api.models import (
 router = APIRouter(tags=["Chat"], dependencies=[Depends(require_api_key)])
 
 
+def _last_ai_per_turn(messages: list[dict]) -> list[dict]:
+    """For each human turn keep only the last ai message that follows it."""
+    result: list[dict] = []
+    pending_ai: dict | None = None
+    for m in messages:
+        role = m.get("role")
+        if role == "human":
+            if pending_ai is not None:
+                result.append(pending_ai)
+                pending_ai = None
+            result.append(m)
+        elif role == "ai":
+            pending_ai = m  # overwrite — keep only the last ai message per turn
+    if pending_ai is not None:
+        result.append(pending_ai)
+    return result
+
+
 async def _sse_stream(
     agent: Any,
     message: str,
@@ -35,6 +53,10 @@ async def _sse_stream(
     document_text: str,
     force_route: str = "",
 ) -> AsyncGenerator[str]:
+    # Flush headers to the client immediately — without this the browser's
+    # fetch() blocks until the first data chunk, which can be tens of seconds
+    # away when the DB or LLM is slow.
+    yield ": stream-start\n\n"
     try:
         async for event in agent.stream(
             message,
@@ -59,12 +81,16 @@ async def chat_global(
     agent: AgentDep,
 ) -> StreamingResponse | ChatResponse:
     """Chat without a corpus — uses the default jurisdiction, no document context."""
+    import logging as _logging
     from hammurabi.config import settings
 
     session_id = body.session_id or str(uuid.uuid4())
     jurisdiction = body.jurisdiction or settings.default_jurisdiction
 
-    await store.touch_global_session(session_id)
+    try:
+        await store.touch_global_session(session_id)
+    except Exception as exc:
+        _logging.getLogger(__name__).warning("touch_global_session failed (non-fatal): %s", exc)
 
     if body.stream:
         return StreamingResponse(
@@ -88,7 +114,13 @@ async def chat(
     body: ChatRequest,
     agent: AgentDep,
 ) -> StreamingResponse | ChatResponse:
-    rec = await store.get_corpus(corpus_id)
+    import logging as _logging
+
+    try:
+        rec = await store.get_corpus(corpus_id)
+    except Exception as exc:
+        _logging.getLogger(__name__).warning("get_corpus failed (non-fatal): %s", exc)
+        rec = None
     if not rec:
         raise HTTPException(status_code=404, detail="Corpus not found")
 
@@ -206,7 +238,11 @@ async def simulate_case(
     session_id = body.session_id or str(uuid.uuid4())
     jurisdiction = body.jurisdiction or settings.default_jurisdiction
 
-    await store.touch_global_session(session_id)
+    try:
+        await store.touch_global_session(session_id)
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("touch_global_session failed (non-fatal): %s", exc)
 
     query = body.scenario
     if body.legal_domain:
@@ -251,7 +287,8 @@ async def get_global_session_messages(session_id: str) -> list[dict]:
     from hammurabi.reasoning.session import load_messages
 
     raw = await load_messages(session_id)
-    return [m for m in raw if m.get("role") in ("human", "ai")]
+    filtered = [m for m in raw if m.get("role") in ("human", "ai")]
+    return _last_ai_per_turn(filtered)
 
 
 @router.get("/corpus/{corpus_id}/sessions", response_model=list[SessionSummary])
@@ -281,7 +318,8 @@ async def get_session_messages(corpus_id: str, session_id: str) -> list[dict]:
     from hammurabi.reasoning.session import load_messages
 
     raw = await load_messages(session_id)
-    return [m for m in raw if m.get("role") in ("human", "ai")]
+    filtered = [m for m in raw if m.get("role") in ("human", "ai")]
+    return _last_ai_per_turn(filtered)
 
 
 @router.delete(
