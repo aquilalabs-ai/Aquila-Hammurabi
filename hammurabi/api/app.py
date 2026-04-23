@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import logging.config
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -18,22 +20,30 @@ from hammurabi.reasoning.agent import IRACAgent
 from hammurabi.reasoning.session import close_engine as close_session_engine
 from hammurabi.reasoning.session import ensure_schema as ensure_session_schema
 
+_log = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    _log.info("startup: initialising session schema")
     await ensure_session_schema()
+    _log.info("startup: initialising meta store schema")
     await meta_store.ensure_schema()
 
+    _log.info("startup: building knowledge service and agent")
     knowledge = LegalKnowledgeService()
     agent = IRACAgent(knowledge)
     app.state.knowledge = knowledge
     app.state.agent = agent
+    _log.info("startup: ready")
 
     yield
 
+    _log.info("shutdown: closing connections")
     await knowledge.close()
     await close_session_engine()
     await meta_store.close_engine()
+    _log.info("shutdown: done")
 
 
 def _configure_langsmith() -> None:
@@ -44,6 +54,34 @@ def _configure_langsmith() -> None:
 
 
 _configure_langsmith()
+
+
+def _configure_logging() -> None:
+    logging.config.dictConfig(
+        {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {
+                "default": {
+                    "format": "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+                    "datefmt": "%H:%M:%S",
+                },
+            },
+            "handlers": {
+                "console": {
+                    "class": "logging.StreamHandler",
+                    "formatter": "default",
+                },
+            },
+            "loggers": {
+                "hammurabi": {"level": "DEBUG", "handlers": ["console"], "propagate": False},
+            },
+            "root": {"level": "WARNING", "handlers": ["console"]},
+        }
+    )
+
+
+_configure_logging()
 
 
 def create_app() -> FastAPI:

@@ -80,7 +80,8 @@ export function ReportAssistant() {
   const [coherenceResult, setCoherenceResult] = useState<string | null>(null);
 
   // ── Helpers ───────────────────────────────────────────────────────────────
-  const clearTab = (t: ReportTab) => {
+  // Called by the "New / Reset" button inside each tab to fully wipe that tab's state.
+  const resetTab = (t: ReportTab) => {
     setError(null);
     setSources([]);
     setDrawerOpen(false);
@@ -90,11 +91,25 @@ export function ReportAssistant() {
       setConfirmedProblematic("");
       setPlanResult(null);
       setPlanSessionId(null);
+      setTopic("");
+      setField("");
+      setConstraints("");
     } else if (t === "critique") {
       setCritiqueResult(null);
+      setCritiqueTopic("");
+      setPlan("");
     } else {
       setCoherenceResult(null);
+      setCoherenceTopic("");
+      setContent("");
     }
+  };
+
+  // Switching tabs only clears transient UI state; results are preserved.
+  const switchTab = (t: ReportTab) => {
+    setTab(t);
+    setError(null);
+    setDrawerOpen(false);
   };
 
   const activeResult =
@@ -207,21 +222,31 @@ export function ReportAssistant() {
     <div className="space-y-4">
       <SourcesDrawer sources={sources} open={drawerOpen} onClose={() => setDrawerOpen(false)} />
 
-      {/* Tab bar */}
-      <div className="flex gap-0.5 rounded-lg bg-slate-800/60 p-0.5">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => { setTab(t.key); clearTab(t.key); }}
-            className={cn(
-              "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
-              tab === t.key ? "bg-slate-700 text-slate-100" : "text-slate-500 hover:text-slate-300",
-            )}
-          >
-            {t.icon}
-            {t.label}
-          </button>
-        ))}
+      {/* Tab bar + Reset button */}
+      <div className="flex items-center gap-2">
+        <div className="flex flex-1 gap-0.5 rounded-lg bg-slate-800/60 p-0.5">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => switchTab(t.key)}
+              className={cn(
+                "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
+                tab === t.key ? "bg-slate-700 text-slate-100" : "text-slate-500 hover:text-slate-300",
+              )}
+            >
+              {t.icon}
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => resetTab(tab)}
+          title="Reset this tab"
+          className="flex items-center gap-1 rounded px-2 py-1.5 text-xs text-slate-500 hover:text-slate-300 hover:bg-slate-700 transition-colors"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          Reset
+        </button>
       </div>
 
       {/* ── PLAN TAB ──────────────────────────────────────────────────────── */}

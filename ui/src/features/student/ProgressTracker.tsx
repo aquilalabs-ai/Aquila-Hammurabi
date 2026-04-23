@@ -1,10 +1,16 @@
-import { BookMarked, Trophy, AlertTriangle, TrendingUp, Star } from "lucide-react";
+import { BookMarked, Trophy, AlertTriangle, TrendingUp, Star, RotateCcw } from "lucide-react";
 import { useAppStore } from "../../store/app";
 import { Card, CardTitle } from "../../components/ui/Card";
 import { Badge } from "../../components/ui/Badge";
 
 export function ProgressTracker() {
-  const { topicsCovered, quizScores, flaggedArticles } = useAppStore();
+  const {
+    topicsCovered,
+    quizScores,
+    flaggedArticles,
+    setActiveStudentTab,
+    setPendingRetakeQuiz,
+  } = useAppStore();
 
   const avgScore =
     quizScores.length > 0
@@ -48,6 +54,11 @@ export function ProgressTracker() {
           <div className="space-y-2">
             {lastQuizzes.map((s) => (
               <div key={s.session_id} className="flex items-center gap-2">
+                {s.topic && (
+                  <span className="text-xs text-slate-500 truncate max-w-[80px]" title={s.topic}>
+                    {s.topic}
+                  </span>
+                )}
                 <div className="flex-1 h-1.5 rounded-full bg-slate-700 overflow-hidden">
                   <div
                     className={`h-full rounded-full transition-all ${
@@ -61,9 +72,23 @@ export function ProgressTracker() {
                   />
                 </div>
                 <span className="text-xs font-mono text-slate-400 w-10 text-right">{s.score}%</span>
-                <span className="text-xs text-slate-600">
+                <span className="text-xs text-slate-600 w-16">
                   {new Date(s.date).toLocaleDateString()}
                 </span>
+                {s.questions && s.questions.length > 0 ? (
+                  <button
+                    onClick={() => {
+                      setPendingRetakeQuiz({ questions: s.questions!, topic: s.topic });
+                      setActiveStudentTab("quiz");
+                    }}
+                    title="Retake this quiz"
+                    className="text-slate-600 hover:text-gold-400 transition-colors shrink-0"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  </button>
+                ) : (
+                  <span className="w-3.5 shrink-0" />
+                )}
               </div>
             ))}
           </div>

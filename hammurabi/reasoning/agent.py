@@ -14,8 +14,11 @@ END
 from __future__ import annotations
 
 import json
+import logging
+import time
+from collections.abc import AsyncIterator
 from datetime import date
-from typing import Annotated, Any, AsyncIterator
+from typing import Annotated, Any
 
 from langchain_core.messages import (
     AIMessage,
@@ -41,6 +44,8 @@ from hammurabi.reasoning.prompts import (
     SYSTEM_BASE,
 )
 from hammurabi.reasoning.tools import build_tools
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Agent state
@@ -88,12 +93,18 @@ async def router_node(state: AgentState, llm_plain: ChatOpenAI) -> dict[str, Any
     """Classify the query and inject the appropriate skill prompt fragment."""
     forced = state.get("force_route", "")
     if forced and forced in SKILL_PROMPTS:
+        log.debug("[router] forced route=%s", forced)
         return {"route": forced, "skill_prompt": SKILL_PROMPTS[forced]}
 
+    log.debug("[router] classifying query (len=%d)", len(state["query"]))
+    t0 = time.monotonic()
     prompt = ROUTER_PROMPT.format(query=state["query"])
     response = await llm_plain.ainvoke([HumanMessage(content=prompt)])
-    raw = str(response.content).strip().lower().split()[0] if response.content else "direct"
-    route = raw if raw in SKILL_PROMPTS else "direct"
+    raw = str(response.content).strip().lower().split()[0] if response.content else "research"
+    # Unknown labels (e.g. "irac", "analyse") fall back to "research" — never "direct",
+    # because "direct" skips retrieval and conflicts with the strict grounding rule.
+    route = raw if raw in SKILL_PROMPTS else "research"
+    log.info("[router] route=%s raw=%r (%.2fs)", route, raw, time.monotonic() - t0)
     return {
         "route": route,
         "skill_prompt": SKILL_PROMPTS[route],
@@ -112,11 +123,16 @@ async def _rewrite_query(query: str, jurisdiction: str, llm: Any, n: int = 2) ->
     """Return up to *n* legal-terminology reformulations of *query*."""
     lang = "French" if jurisdiction.upper() == "FR" else "English"
     prompt = _REWRITE_PROMPT.format(query=query, n=n, lang=lang)
+    log.debug("[retrieval] rewriting query into %d legal variants", n)
+    t0 = time.monotonic()
     try:
         response = await llm.ainvoke([HumanMessage(content=prompt)])
         lines = [l.strip() for l in str(response.content).splitlines() if l.strip()]
-        return lines[:n]
-    except Exception:  # noqa: BLE001
+        result = lines[:n]
+        log.debug("[retrieval] rewrites done (%.2fs): %s", time.monotonic() - t0, result)
+        return result
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[retrieval] query rewrite failed (%.2fs): %s", time.monotonic() - t0, exc)
         return []
 
 
@@ -126,26 +142,29 @@ async def retrieval_node(state: AgentState, knowledge: Any, llm: Any) -> dict[st
     Runs the original query *and* LLM-rewritten legal-terminology variants so that
     colloquial questions ("abîme ma voiture") map to the correct statute articles.
     """
-    import logging as _logging
-
-    log = _logging.getLogger(__name__)
+    t0 = time.monotonic()
     jur = state["jurisdiction"]
     query = state["query"]
     top_k = 5 if (state["route"] == "analysis" and state["document_text"]) else 8
 
+    log.info("[retrieval] start  route=%s jur=%s top_k=%d", state["route"], jur, top_k)
+
     # Build query list: original + legal reformulations
     extra = await _rewrite_query(query, jur, llm, n=2)
     queries = [query] + extra
-    log.debug("retrieval queries: %s", queries)
+    log.debug("[retrieval] queries: %s", queries)
 
     seen_ids: set[str] = set()
     merged: list[Any] = []
 
-    for q in queries:
+    for i, q in enumerate(queries):
+        log.debug("[retrieval] searching query %d/%d: %r", i + 1, len(queries), q[:80])
+        qt = time.monotonic()
         try:
             results = await knowledge.search(q, jurisdiction=jur, top_k=top_k)
+            log.debug("[retrieval] q%d: %d hits (%.2fs)", i + 1, len(results), time.monotonic() - qt)  # noqa: E501
         except Exception as exc:
-            log.warning("Retrieval failed for query %r: %s", q, exc)
+            log.warning("[retrieval] q%d failed (%.2fs): %s", i + 1, time.monotonic() - qt, exc)
             continue
         for r in results:
             uid = r.article_id or r.case_id or r.text[:60]
@@ -156,6 +175,8 @@ async def retrieval_node(state: AgentState, knowledge: Any, llm: Any) -> dict[st
     # Re-rank by score and keep top_k
     merged.sort(key=lambda r: r.score, reverse=True)
     merged = merged[:top_k]
+
+    log.info("[retrieval] done  %d unique results (%.2fs)", len(merged), time.monotonic() - t0)
 
     if not merged:
         return {"retrieved_context": ""}
@@ -170,6 +191,8 @@ async def retrieval_node(state: AgentState, knowledge: Any, llm: Any) -> dict[st
 
 async def reasoning_node(state: AgentState, llm_with_tools: Any) -> dict[str, Any]:
     """Run the LLM with tools. Injects loop-break and recovery guards."""
+    t0 = time.monotonic()
+    log.info("[reasoning] start  tool_calls_so_far=%d", state["tool_call_count"])
     today = date.today().isoformat()
     jur = state["jurisdiction"]
     system_content = SYSTEM_BASE.format(jurisdiction=jur, today=today)
@@ -188,19 +211,15 @@ async def reasoning_node(state: AgentState, llm_with_tools: Any) -> dict[str, An
     # empty-context gate must not fire — it would force redundant tool calls.
     is_followup = sum(1 for m in messages if isinstance(m, HumanMessage)) > 1
 
-    # Routes that start with no KB context and drive retrieval entirely through tools —
-    # injecting the empty-context gate here would conflict with their skill prompts.
-    _TOOL_DRIVEN_ROUTES = {
-        "report", "report_problematic", "report_plan", "report_critique", "report_coherence",
-        "drafting", "learning",
-    }
-
-    # Empty-context gate — only for the very first message of a session.
+    # Empty-context gate fires only for routes that went through retrieval_node
+    # and got nothing back.  "direct" and tool-driven routes must be excluded:
+    # "direct" + SYSTEM_BASE's strict grounding rule creates an impossible
+    # situation that forces the LLM into an infinite tool-call loop.
     if (
         not state.get("retrieved_context")
         and state["tool_call_count"] == 0
         and not is_followup
-        and state["route"] not in _TOOL_DRIVEN_ROUTES
+        and state["route"] in _RETRIEVAL_ROUTES
     ):
         messages = [*messages, HumanMessage(content=EMPTY_CONTEXT_GATE)]
 
@@ -219,6 +238,8 @@ async def reasoning_node(state: AgentState, llm_with_tools: Any) -> dict[str, An
 
     all_messages = [system_msg, *messages]
     response = await llm_with_tools.ainvoke(all_messages)
+    has_tools = bool(getattr(response, "tool_calls", None))
+    log.info("[reasoning] done  has_tool_calls=%s (%.2fs)", has_tools, time.monotonic() - t0)
 
     return {
         "messages": [response],
@@ -230,18 +251,27 @@ async def tools_node(state: AgentState, tools_by_name: dict[str, Any]) -> dict[s
     """Execute all tool calls from the last AI message."""
     last: BaseMessage = state["messages"][-1]
     if not isinstance(last, AIMessage) or not last.tool_calls:
+        log.debug("[tools] no tool calls to execute")
         return {"tool_call_count": state["tool_call_count"]}
+
+    names = [tc["name"] for tc in last.tool_calls]
+    log.info("[tools] executing %d tool(s): %s", len(names), names)
 
     tool_messages: list[ToolMessage] = []
     for tc in last.tool_calls:
         tool = tools_by_name.get(tc["name"])
+        t0 = time.monotonic()
         if tool is None:
+            log.warning("[tools] unknown tool: %s", tc["name"])
             result = f"Unknown tool: {tc['name']}"
         else:
+            log.debug("[tools] start %s  args=%s", tc["name"], list(tc.get("args", {}).keys()))
             try:
                 args: dict[str, Any] = tc.get("args", {})
                 result = await tool.arun(args)
+                log.info("[tools] %s done (%.2fs)", tc["name"], time.monotonic() - t0)
             except Exception as exc:  # noqa: BLE001
+                log.error("[tools] %s failed (%.2fs): %s", tc["name"], time.monotonic() - t0, exc)
                 result = f"Tool error: {exc}"
         tool_messages.append(
             ToolMessage(content=str(result), tool_call_id=tc["id"])
@@ -255,7 +285,9 @@ async def tools_node(state: AgentState, tools_by_name: dict[str, Any]) -> dict[s
 
 async def formatter_node(state: AgentState, llm_plain: ChatOpenAI) -> dict[str, Any]:
     """Produce the final structured output based on the active route."""
+    t0 = time.monotonic()
     route = state.get("route", "direct")
+    log.info("[formatter] start  route=%s", route)
     format_prompt = FORMAT_PROMPTS.get(route, FORMAT_PROMPTS["direct"])
 
     # Gather conversation text (exclude system messages)
@@ -274,6 +306,7 @@ async def formatter_node(state: AgentState, llm_plain: ChatOpenAI) -> dict[str, 
         if stripped.startswith("{") or stripped.startswith("["):
             try:
                 json.loads(stripped)
+                log.info("[formatter] pass-through JSON (%.2fs)", time.monotonic() - t0)
                 return {
                     "formatted_response": stripped,
                     "messages": [AIMessage(content=stripped)],
@@ -299,6 +332,7 @@ async def formatter_node(state: AgentState, llm_plain: ChatOpenAI) -> dict[str, 
     ]
     response = await llm_plain.ainvoke(messages_for_format)
     final = str(response.content)
+    log.info("[formatter] done  response_len=%d (%.2fs)", len(final), time.monotonic() - t0)
 
     return {
         "formatted_response": final,
@@ -311,8 +345,14 @@ async def formatter_node(state: AgentState, llm_plain: ChatOpenAI) -> dict[str, 
 # ---------------------------------------------------------------------------
 
 
+_RETRIEVAL_ROUTES = frozenset({
+    "analysis", "research", "simulation",
+    "irac", "analyse", "analysis_irac",  # common LLM mis-labels, treated as research
+})
+
+
 def _after_router(state: AgentState) -> str:
-    return "retrieval" if state["route"] in ("analysis", "research", "simulation") else "reasoning"
+    return "retrieval" if state["route"] in _RETRIEVAL_ROUTES else "reasoning"
 
 
 def _after_reasoning(state: AgentState) -> str:
@@ -400,11 +440,15 @@ class IRACAgent:
     ) -> str:
         """Run a single query through the agent and return the final response."""
         from hammurabi.reasoning.session import load_messages, save_messages
-        print("invoke: loading session : ", session_id)
+
+        t0 = time.monotonic()
+        log.info("[invoke] start  sid=%s jur=%s route=%r", session_id, jurisdiction, force_route)
 
         jur = jurisdiction or settings.default_jurisdiction
+        log.debug("[invoke] loading session messages")
         stored = await load_messages(session_id)
         prior_messages = _deserialise_messages(stored)
+        log.debug("[invoke] loaded %d prior messages", len(prior_messages))
         initial_messages = [*prior_messages, HumanMessage(content=query)]
         if history:
             initial_messages = [*history, HumanMessage(content=query)]
@@ -423,12 +467,15 @@ class IRACAgent:
             "formatted_response": "",
         }
 
+        log.debug("[invoke] running graph")
         final_state: dict[str, Any] = await self._graph.ainvoke(initial_state)
         response: str = final_state.get("formatted_response", "")
 
         # Persist updated conversation
         all_messages = final_state.get("messages", [])
+        log.debug("[invoke] saving %d messages", len(all_messages))
         await save_messages(session_id, _serialise_messages(all_messages))
+        log.info("[invoke] done  response_len=%d (%.2fs)", len(response), time.monotonic() - t0)
 
         return response
 
@@ -443,7 +490,9 @@ class IRACAgent:
     ) -> tuple[str, list[BaseMessage]]:
         """Like invoke() but also returns the full message list for source extraction."""
         from hammurabi.reasoning.session import load_messages, save_messages
-        print("invoke_with_sources: loading session : ", session_id)
+
+        t0 = time.monotonic()
+        log.info("[invoke_with_sources] start  session=%s", session_id)
         jur = jurisdiction or settings.default_jurisdiction
         stored = await load_messages(session_id)
         prior_messages = _deserialise_messages(stored)
@@ -468,6 +517,7 @@ class IRACAgent:
         all_messages: list[BaseMessage] = final_state.get("messages", [])
 
         await save_messages(session_id, _serialise_messages(all_messages))
+        log.info("[invoke_with_sources] done (%.2fs)", time.monotonic() - t0)
         return response, all_messages
 
     async def stream(
@@ -482,9 +532,12 @@ class IRACAgent:
         """Stream agent events token-by-token via astream_events."""
         from hammurabi.reasoning.session import load_messages, save_messages
 
+        t0 = time.monotonic()
+        log.info("[stream] start  session=%s jur=%s", session_id, jurisdiction)
         jur = jurisdiction or settings.default_jurisdiction
         stored = await load_messages(session_id)
         prior_messages = _deserialise_messages(stored)
+        log.debug("[stream] loaded %d prior messages", len(prior_messages))
         initial_messages = [*prior_messages, HumanMessage(content=query)]
 
         initial_state: AgentState = {
@@ -537,7 +590,9 @@ class IRACAgent:
                 final_messages = output.get("messages", [])
 
         if final_messages:
+            log.debug("[stream] saving %d messages", len(final_messages))
             await save_messages(session_id, _serialise_messages(final_messages))
+        log.info("[stream] done (%.2fs)", time.monotonic() - t0)
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -13,8 +15,15 @@ from hammurabi.api import jobs as job_store
 from hammurabi.api import store
 from hammurabi.api.auth import require_api_key
 from hammurabi.api.deps import KnowledgeDep
-from hammurabi.api.models import CorpusIngestResponse, CorpusRegisterRequest, CorpusStats, CorpusSummary
+from hammurabi.api.models import (
+    CorpusIngestResponse,
+    CorpusRegisterRequest,
+    CorpusStats,
+    CorpusSummary,
+)
 from hammurabi.config import settings
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/corpus",
@@ -37,6 +46,8 @@ async def _run_ingestion(
     from hammurabi.ingestion.ner import LegalNERPipeline
     from hammurabi.ingestion.segmenter import LegalDocumentSegmenter
 
+    t0 = time.monotonic()
+    log.info("[ingest] job=%s  corpus=%s  %s/%s", job_id, corpus_id, source_type, jurisdiction)
     await job_store.update_job(job_id, status="running")
     await store.update_corpus_status(corpus_id, "ingesting")
 
@@ -58,23 +69,49 @@ async def _run_ingestion(
 
             loader = URLLoader()
 
+        log.debug("[ingest] job=%s loading source: %s", job_id, source[:120])
+        t1 = time.monotonic()
         doc = await asyncio.to_thread(loader.load, source)
+        pages = len(getattr(doc, "pages", []))
+        log.info("[ingest] job=%s loaded  pages=%d (%.2fs)", job_id, pages, time.monotonic() - t1)
 
         ner = LegalNERPipeline()
         chunker = LegalChunker()
 
         if not doc.segments:
+            log.debug("[ingest] job=%s segmenting document", job_id)
+            t1 = time.monotonic()
             segmenter = LegalDocumentSegmenter()
             doc.segments = await asyncio.to_thread(segmenter.segment, doc)
+            log.info(
+                "[ingest] job=%s segmentation done  segments=%d (%.2fs)",
+                job_id, len(doc.segments), time.monotonic() - t1,
+            )
 
+        log.debug("[ingest] job=%s chunking", job_id)
+        t1 = time.monotonic()
         chunks = await asyncio.to_thread(
             chunker.chunk_document, doc, None, jurisdiction
         )
+        log.info("[ingest] job=%s chunks=%d (%.2fs)", job_id, len(chunks), time.monotonic() - t1)
+
+        log.debug("[ingest] job=%s running NER on %d chunks", job_id, len(chunks))
+        t1 = time.monotonic()
         for chunk in chunks:
             ner_result = ner.extract(chunk.text)
             chunk.tags = list(set(chunk.tags + ner_result.tags))
+        log.info("[ingest] job=%s NER done (%.2fs)", job_id, time.monotonic() - t1)
 
+        log.debug("[ingest] job=%s writing to graph + vector store", job_id)
+        t1 = time.monotonic()
         summary = await knowledge.ingest_chunks(chunks, corpus_id=corpus_id)
+        log.info(
+            "[ingest] job=%s write done  a=%d c=%d v=%d err=%d (%.2fs)",
+            job_id, summary.articles_merged, summary.cases_merged,
+            summary.chunks_upserted, len(summary.errors), time.monotonic() - t1,
+        )
+        if summary.errors:
+            log.warning("[ingest] job=%s ingestion errors: %s", job_id, summary.errors[:5])
 
         await store.update_corpus_status(
             corpus_id,
@@ -94,7 +131,11 @@ async def _run_ingestion(
                 "errors": summary.errors,
             },
         )
+        log.info("[ingest] job=%s completed (%.2fs total)", job_id, time.monotonic() - t0)
     except Exception as exc:  # noqa: BLE001
+        log.error(
+            "[ingest] job=%s failed (%.2fs): %s", job_id, time.monotonic() - t0, exc, exc_info=True
+        )
         await store.update_corpus_status(corpus_id, "failed")
         await job_store.update_job(job_id, status="failed", error=str(exc))
     finally:

@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   HelpCircle,
   CheckCircle2,
   XCircle,
   ChevronRight,
   RefreshCw,
+  RotateCcw,
   Trophy,
 } from "lucide-react";
 import { post } from "../../api/client";
@@ -49,11 +50,25 @@ interface QuizState {
 }
 
 export function QuizPanel() {
-  const { activeCorpusId, tone, addQuizScore } = useAppStore();
+  const { activeCorpusId, tone, addQuizScore, pendingRetakeQuiz, setPendingRetakeQuiz } = useAppStore();
   const [topic, setTopic] = useState("");
   const [count, setCount] = useState(5);
   const [loading, setLoading] = useState(false);
   const [quiz, setQuiz] = useState<QuizState | null>(null);
+
+  useEffect(() => {
+    if (pendingRetakeQuiz) {
+      setQuiz({
+        questions: pendingRetakeQuiz.questions,
+        current: 0,
+        answers: {},
+        revealed: new Set(),
+        done: false,
+      });
+      if (pendingRetakeQuiz.topic) setTopic(pendingRetakeQuiz.topic);
+      setPendingRetakeQuiz(null);
+    }
+  }, [pendingRetakeQuiz, setPendingRetakeQuiz]);
 
   const generateQuiz = async () => {
     if (!activeCorpusId) return;
@@ -102,12 +117,28 @@ export function QuizPanel() {
           <Button
             variant="secondary"
             onClick={() => {
-              addQuizScore(crypto.randomUUID(), pct);
+              addQuizScore(crypto.randomUUID(), pct, quiz.questions, topic || undefined);
               setQuiz(null);
             }}
           >
             <RefreshCw className="h-4 w-4" />
             New Quiz
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              addQuizScore(crypto.randomUUID(), pct, quiz.questions, topic || undefined);
+              setQuiz({
+                questions: quiz.questions,
+                current: 0,
+                answers: {},
+                revealed: new Set(),
+                done: false,
+              });
+            }}
+          >
+            <RotateCcw className="h-4 w-4" />
+            Retake
           </Button>
         </div>
       </div>

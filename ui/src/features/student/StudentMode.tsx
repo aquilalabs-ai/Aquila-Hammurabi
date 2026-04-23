@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   BookOpen,
   HelpCircle,
@@ -18,9 +17,8 @@ import { SimplifiedRiskReport } from "./SimplifiedRiskReport";
 import { ToneControl } from "./ToneControl";
 import { ReportAssistant } from "./ReportAssistant";
 import { useAppStore } from "../../store/app";
+import type { StudentTab } from "../../store/app";
 import { cn } from "../../components/ui/cn";
-
-type StudentTab = "concepts" | "irac" | "quiz" | "simulation" | "report" | "progress" | "risk" | "settings";
 
 const TABS: { key: StudentTab; label: string; icon: React.ReactNode }[] = [
   { key: "concepts", label: "Concepts", icon: <BookOpen className="h-3.5 w-3.5" /> },
@@ -36,8 +34,7 @@ const TABS: { key: StudentTab; label: string; icon: React.ReactNode }[] = [
 const CORPUS_DEPENDENT_TABS: StudentTab[] = ["concepts", "irac", "quiz", "simulation", "risk"];
 
 export function StudentMode() {
-  const [tab, setTab] = useState<StudentTab>("concepts");
-  const { activeCorpusId } = useAppStore();
+  const { activeCorpusId, activeStudentTab: tab, setActiveStudentTab: setTab } = useAppStore();
   const needsCorpus = CORPUS_DEPENDENT_TABS.includes(tab);
 
   return (
@@ -69,16 +66,16 @@ export function StudentMode() {
         </div>
       )}
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-y-auto p-4 max-w-2xl mx-auto w-full">
-        {tab === "concepts" && <ConceptCards />}
-        {tab === "irac" && <IRACWalkthrough />}
-        {tab === "quiz" && <QuizPanel />}
-        {tab === "simulation" && <CaseSimulation />}
-        {tab === "report" && <ReportAssistant />}
-        {tab === "progress" && <ProgressTracker />}
-        {tab === "risk" && <SimplifiedRiskReport />}
-        {tab === "settings" && <ToneControl />}
+      {/* Tab content — all panels stay mounted so local state is preserved across tab switches */}
+      <div className="relative flex-1 overflow-y-auto">
+        <div className={cn("p-4 max-w-2xl mx-auto w-full", tab !== "concepts" && "hidden")}><ConceptCards /></div>
+        <div className={cn("p-4 max-w-2xl mx-auto w-full", tab !== "irac" && "hidden")}><IRACWalkthrough /></div>
+        <div className={cn("p-4 max-w-2xl mx-auto w-full", tab !== "quiz" && "hidden")}><QuizPanel /></div>
+        <div className={cn("p-4 max-w-2xl mx-auto w-full", tab !== "simulation" && "hidden")}><CaseSimulation /></div>
+        <div className={cn("p-4 max-w-2xl mx-auto w-full", tab !== "report" && "hidden")}><ReportAssistant /></div>
+        <div className={cn("p-4 max-w-2xl mx-auto w-full", tab !== "progress" && "hidden")}><ProgressTracker /></div>
+        <div className={cn("p-4 max-w-2xl mx-auto w-full", tab !== "risk" && "hidden")}><SimplifiedRiskReport /></div>
+        <div className={cn("p-4 max-w-2xl mx-auto w-full", tab !== "settings" && "hidden")}><ToneControl /></div>
       </div>
     </div>
   );

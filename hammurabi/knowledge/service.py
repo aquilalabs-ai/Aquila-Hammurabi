@@ -16,6 +16,8 @@ Usage
 
 from __future__ import annotations
 
+import logging
+import time
 import uuid
 from typing import Any
 
@@ -29,6 +31,8 @@ from hammurabi.knowledge.models import (
     SearchResult,
 )
 from hammurabi.knowledge.vector import LegalVectorStore
+
+log = logging.getLogger(__name__)
 
 
 class LegalKnowledgeService:
@@ -81,6 +85,8 @@ class LegalKnowledgeService:
         """
         resolved_corpus_id = corpus_id or str(uuid.uuid4())
         summary = IngestionSummary(corpus_id=resolved_corpus_id)
+        t0 = time.monotonic()
+        log.info("[knowledge] ingest start  corpus=%s chunks=%d", resolved_corpus_id, len(chunks))
 
         # ── 1. Graph ingestion ─────────────────────────────────────────────────
         seen_articles: set[str] = set()
@@ -188,14 +194,28 @@ class LegalKnowledgeService:
                 except Exception as exc:  # noqa: BLE001
                     summary.errors.append(f"Clause {clause_id}: {exc}")
 
+        log.info(
+            "[knowledge] graph writes done  articles=%d cases=%d refs=%d errors=%d (%.2fs)",
+            summary.articles_merged, summary.cases_merged,
+            summary.references_created, len(summary.errors), time.monotonic() - t0,
+        )
+
         # ── 2. Vector upsert ───────────────────────────────────────────────────
+        t1 = time.monotonic()
+        log.debug("[knowledge] starting vector upsert for %d chunks", len(chunks))
         try:
             summary.chunks_upserted = await self._vector.upsert_chunks(
                 chunks, corpus_id=resolved_corpus_id
             )
+            log.info(
+                "[knowledge] vector upsert done  points=%d (%.2fs)",
+                summary.chunks_upserted, time.monotonic() - t1,
+            )
         except Exception as exc:  # noqa: BLE001
+            log.error("[knowledge] vector upsert failed (%.2fs): %s", time.monotonic() - t1, exc)
             summary.errors.append(f"Vector upsert: {exc}")
 
+        log.info("[knowledge] ingest_chunks done (%.2fs total)", time.monotonic() - t0)
         return summary
 
     # ------------------------------------------------------------------

@@ -25,7 +25,7 @@ FOLLOW-UP RULE: If the message history contains prior turns, tool results from t
 prior turns ARE valid grounding. You may cite articles and cases that already appeared \
 in previous tool call results without calling the tool again — the information is already \
 in context. Only call a tool if the specific information you need was NOT retrieved in \
-any prior turn AND is NOT in the current Retrieved Context.
+any prior turn AND is NOT in the current Retrieved Context. Say you don't know if the question is not related to the legal domain.
 
 When using tools, prefer the most specific tool available for the task. \
 Call tools only when they add NEW information not already present in the Retrieved Context \
@@ -371,6 +371,10 @@ SKILL_PROMPTS: dict[str, str] = {
     "report_critique": _SKILL_REPORT_CRITIQUE,
     "report_coherence": _SKILL_REPORT_COHERENCE,
     "direct": "",
+    # Common LLM mis-labels — map to the closest real route so the fallback never fires.
+    "irac": _SKILL_LEGAL_RESEARCH,
+    "analyse": _SKILL_LEGAL_RESEARCH,
+    "analysis_irac": _SKILL_LEGAL_RESEARCH,
 }
 
 # ---------------------------------------------------------------------------
@@ -383,13 +387,17 @@ only the category name — no explanation.
 
 Categories:
 - analysis   : user uploads or pastes a contract/document for review or risk assessment
-- research   : user asks a legal question about rights, obligations, remedies, procedures, or legal doctrine — \
-               even if phrased colloquially (e.g. "puis-je me rétracter ?", "mon voisin fait du bruit", \
-               "peut-on annuler un contrat ?"). When in doubt, use research.
+- research   : user asks a legal question about rights, obligations, remedies, or legal doctrine \
+               — even if phrased colloquially or asks for an IRAC walkthrough on a legal topic \
+               (e.g. "puis-je me rétracter ?", "walk me through the IRAC for breach of contract", \
+               "fais une analyse IRAC du non-respect de contrat", "quels sont mes droits ?"). \
+               When in doubt between research and simulation, use research.
 - drafting   : user wants to write, improve, or generate a legal clause, contract section, memo, or pleading
-- learning   : user is a student, asks for a pedagogical explanation, wants examples, or requests quiz questions
-- simulation : user provides a complete case scenario (parties, facts, circumstances) and asks the AI \
-               to solve, analyse, or apply the law to it using IRAC reasoning \
+- learning   : user is a student asking for a pedagogical explanation, \
+               step-by-step concept breakdown, examples, or quiz questions \
+               — NOT a specific legal IRAC request
+- simulation : user provides a concrete case scenario with named parties \
+               or specific facts and asks the AI to solve it via IRAC \
                (e.g. "Alice signed a contract under duress… what are her options?", \
                "A seller concealed a defect… analyse the liability")
 - report     : user is a student working on an end-of-studies project, thesis, memoir, \
@@ -397,9 +405,9 @@ Categories:
                or ideas checked for coherence \
                (e.g. "génère un plan pour mon mémoire", "critique mon plan", \
                "vérifie la cohérence de mon introduction")
-- direct     : user asks a purely administrative question with no legal analysis needed \
+- direct     : user asks a purely factual/administrative question with NO legal analysis \
                (e.g. "What year was the Civil Code enacted?", "Who wrote article 1103?"). \
-               Do NOT use this for any question about legal rights, remedies, or obligations.
+               Do NOT use direct for IRAC, legal rights, remedies, or obligations.
 
 Query: {query}
 

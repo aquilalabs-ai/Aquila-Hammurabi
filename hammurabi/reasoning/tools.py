@@ -456,14 +456,15 @@ class LegalNewsSearchTool(BaseTool):
 
     name: str = "legal_news_search"
     description: str = (
-        "Search for recent news, legislative changes, and jurisprudential developments "
-        "on a legal topic from trusted French legal sources "
-        "(Légifrance, Cour de cassation, Conseil d'État, Dalloz Actualité, "
-        "LexBase, Village de la Justice, Le Club des Juristes, etc.). "
-        "Use during problematic generation to ground suggestions in current legal debates. "
-        "Pass a French legal keyword query, e.g. 'responsabilité algorithme contrat 2024'."
+        "Search for recent French legal news and jurisprudential developments from trusted sources "
+        "(Légifrance, Cour de cassation, Conseil d'État, Dalloz Actualité, LexBase, etc.). "
+        "ONLY use this tool for report / mémoire / thesis tasks where current legal debates matter. "
+        "Do NOT call this for standard legal research, IRAC analysis, or knowledge-base queries — "
+        "use semantic_search or statute_lookup instead."
     )
     args_schema: type[BaseModel] = LegalNewsSearchInput
+
+    _TIMEOUT_S: float = 12.0  # DuckDuckGo calls can stall; hard-kill after this
 
     async def _arun(self, query: str, max_results: int = 6, timelimit: str = "m") -> str:
         import asyncio
@@ -480,25 +481,37 @@ class LegalNewsSearchTool(BaseTool):
         press_query = f"{query} ({_site_filter(_FR_LEGAL_DOMAINS_PRESS)})"
         news_query = f"{query} actualité juridique droit France"
 
+        # Pass a native HTTP timeout so each thread exits on its own if the
+        # network stalls — asyncio.wait_for alone cannot interrupt a running thread.
+        http_timeout = max(5, int(self._TIMEOUT_S) - 2)
+
         def _text(q: str, n: int) -> list[dict[str, str]]:
             try:
-                with DDGS() as ddgs:
+                with DDGS(timeout=http_timeout) as ddgs:
+                    print("Running ddgs.text() with query:", q)
                     return list(ddgs.text(q, max_results=n, region="fr-fr", timelimit=timelimit))
             except Exception:  # noqa: BLE001
                 return []
 
         def _news(q: str, n: int) -> list[dict[str, str]]:
             try:
-                with DDGS() as ddgs:
+                with DDGS(timeout=http_timeout) as ddgs:
+                    print("Running ddgs.news() with query:", q)
                     return list(ddgs.news(q, max_results=n, region="fr-fr", timelimit=timelimit))
             except Exception:  # noqa: BLE001
                 return []
 
-        official_res, press_res, news_res = await asyncio.gather(
-            asyncio.to_thread(_text, official_query, max_results),
-            asyncio.to_thread(_text, press_query, max_results),
-            asyncio.to_thread(_news, news_query, max_results),
-        )
+        try:
+            official_res, press_res, news_res = await asyncio.wait_for(
+                asyncio.gather(
+                    asyncio.to_thread(_text, official_query, max_results),
+                    asyncio.to_thread(_text, press_query, max_results),
+                    asyncio.to_thread(_news, news_query, max_results),
+                ),
+                timeout=self._TIMEOUT_S,
+            )
+        except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+            return "La recherche d'actualités juridiques a expiré (timeout). Veuillez réessayer."
 
         # Merge: official first (highest authority), then press, then news.
         seen_urls: set[str] = set()

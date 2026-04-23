@@ -31,7 +31,12 @@ function Shell() {
         <Sidebar />
         <main className="flex flex-1 overflow-hidden">
           <Suspense fallback={null}>
-            {mode === "professional" ? <ProfessionalMode /> : <StudentMode />}
+            <div className={`flex flex-1 overflow-hidden${mode !== "professional" ? " hidden" : ""}`}>
+              <ProfessionalMode />
+            </div>
+            <div className={`flex flex-1 overflow-hidden${mode !== "student" ? " hidden" : ""}`}>
+              <StudentMode />
+            </div>
           </Suspense>
         </main>
       </div>

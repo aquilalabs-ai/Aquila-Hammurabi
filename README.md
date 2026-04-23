@@ -39,8 +39,8 @@ Aquila-Hammurabi is a vertically integrated legal AI system that ingests legal c
 | M0 — Foundation | ✅ Done | Dev environment, CI, Docker stack, Neo4j legal constraints |
 | M1 — Ingestion | ✅ Done | Ingest PDF contracts, statutory XML, case law; NER pipeline |
 | M2 — Knowledge | ✅ Done | Legal graph (article + citation network) + hybrid semantic search |
-| M3 — Reasoning | ⬜ Planned | IRAC agent, risk scoring, specialised legal chains |
-| M4 — API + UI | ⬜ Planned | FastAPI backend + Pro mode UI + Student mode UI |
+| M3 — Reasoning | ✅ DONE | IRAC agent, risk scoring, specialised legal chains |
+| M4 — API + UI | ✅ DONE | FastAPI backend + Pro mode UI + Student mode UI |
 | M5 — Advanced | ⬜ Planned | Multi-jurisdiction, versioning, doctrine layer, benchmarking |
 
 ---

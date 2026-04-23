@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +26,8 @@ from hammurabi.api.models import (
 )
 from hammurabi.config import settings
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(
     prefix="/docs",
     tags=["Documents"],
@@ -38,12 +42,16 @@ async def _run_analysis(
     doc_text: str,
     jurisdiction: str,
 ) -> None:
+    t0 = time.monotonic()
+    log.info("[analysis] job=%s doc=%s  jur=%s len=%d", job_id, doc_id, jurisdiction, len(doc_text))
     await job_store.update_job(job_id, status="running")
     await store.update_document_analysis(doc_id, job_id, "analyzing")
 
     try:
         from hammurabi.reasoning.risk import ClauseRiskScorer
 
+        log.debug("[analysis] job=%s invoking agent", job_id)
+        t1 = time.monotonic()
         response = await agent.invoke(
             "Perform a full IRAC analysis of this document, identifying key obligations, "
             "risks, and legal issues.",
@@ -51,10 +59,13 @@ async def _run_analysis(
             jurisdiction=jurisdiction,
             document_text=doc_text,
         )
+        log.info("[analysis] job=%s agent done (%.2fs)", job_id, time.monotonic() - t1)
 
+        log.debug("[analysis] job=%s scoring clauses", job_id)
         scorer = ClauseRiskScorer(jurisdiction=jurisdiction)
         clauses = [s.strip() for s in doc_text.split("\n") if len(s.strip()) > 50][:30]
         risk_reports = scorer.score_document(clauses)
+        log.debug("[analysis] job=%s clauses=%d flags=%d", job_id, len(clauses), len(risk_reports))
 
         result: dict[str, Any] = {
             "analysis": response,
@@ -64,7 +75,12 @@ async def _run_analysis(
 
         await store.update_document_analysis(doc_id, job_id, "ready", result)
         await job_store.update_job(job_id, status="completed", result=result)
+        log.info("[analysis] job=%s completed (%.2fs total)", job_id, time.monotonic() - t0)
     except Exception as exc:  # noqa: BLE001
+        log.error(
+            "[analysis] job=%s failed (%.2fs): %s",
+            job_id, time.monotonic() - t0, exc, exc_info=True,
+        )
         await store.update_document_analysis(doc_id, job_id, "failed")
         await job_store.update_job(job_id, status="failed", error=str(exc))
 

@@ -1,8 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { AppMode, ToneLevel } from "../types/api";
+import type { AppMode, QuizQuestion, ToneLevel } from "../types/api";
 
 export type ProfessionalTab = "chat" | "upload" | "risk";
+export type StudentTab = "concepts" | "irac" | "quiz" | "simulation" | "report" | "progress" | "risk" | "settings";
 
 interface AppState {
   // Mode
@@ -24,6 +25,10 @@ interface AppState {
   // Professional mode tab (persisted so mode-switching preserves position)
   activeProfessionalTab: ProfessionalTab;
   setActiveProfessionalTab: (tab: ProfessionalTab) => void;
+
+  // Student mode tab (persisted so mode-switching preserves position)
+  activeStudentTab: StudentTab;
+  setActiveStudentTab: (tab: StudentTab) => void;
 
   // Research sidebar
   researchSidebarOpen: boolean;
@@ -50,8 +55,16 @@ interface AppState {
   markTopicCovered: (articleId: string) => void;
   flaggedArticles: string[];
   toggleFlaggedArticle: (articleId: string) => void;
-  quizScores: Array<{ session_id: string; score: number; date: string }>;
-  addQuizScore: (session_id: string, score: number) => void;
+  quizScores: Array<{
+    session_id: string;
+    score: number;
+    date: string;
+    topic?: string;
+    questions?: QuizQuestion[];
+  }>;
+  addQuizScore: (session_id: string, score: number, questions?: QuizQuestion[], topic?: string) => void;
+  pendingRetakeQuiz: { questions: QuizQuestion[]; topic?: string } | null;
+  setPendingRetakeQuiz: (quiz: { questions: QuizQuestion[]; topic?: string } | null) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -72,6 +85,9 @@ export const useAppStore = create<AppState>()(
 
       activeProfessionalTab: "chat",
       setActiveProfessionalTab: (tab) => set({ activeProfessionalTab: tab }),
+
+      activeStudentTab: "concepts",
+      setActiveStudentTab: (tab) => set({ activeStudentTab: tab }),
 
       researchSidebarOpen: false,
       toggleResearchSidebar: () =>
@@ -108,13 +124,16 @@ export const useAppStore = create<AppState>()(
         })),
 
       quizScores: [],
-      addQuizScore: (session_id, score) =>
+      addQuizScore: (session_id, score, questions?, topic?) =>
         set((s) => ({
           quizScores: [
             ...s.quizScores,
-            { session_id, score, date: new Date().toISOString() },
+            { session_id, score, date: new Date().toISOString(), questions, topic },
           ],
         })),
+
+      pendingRetakeQuiz: null,
+      setPendingRetakeQuiz: (quiz) => set({ pendingRetakeQuiz: quiz }),
     }),
     { name: "hammurabi-app" },
   ),

@@ -13,7 +13,7 @@ router = APIRouter(tags=["Search"], dependencies=[Depends(require_api_key)])
 
 @router.get("/search", response_model=SearchResponse)
 async def search(
-    query: str,
+    q: str,
     knowledge: KnowledgeDep,
     jurisdiction: str | None = None,
     source_type: str | None = None,
@@ -22,7 +22,7 @@ async def search(
 ) -> SearchResponse:
     tag_list = [t.strip() for t in tags.split(",")] if tags else None
     results = await knowledge.search(
-        query,
+        q,
         jurisdiction=jurisdiction,
         source_type=source_type,
         tags=tag_list,
@@ -41,4 +41,4 @@ async def search(
         )
         for r in results
     ]
-    return SearchResponse(query=query, total=len(items), results=items)
+    return SearchResponse(query=q, total=len(items), results=items)

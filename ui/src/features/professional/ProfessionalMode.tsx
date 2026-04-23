@@ -74,20 +74,14 @@ export function ProfessionalMode() {
           </div>
         </div>
 
-        {/* Tab content */}
-        <div className="flex-1 overflow-y-auto">
-          {tab === "chat" && <ChatPanel />}
-          {tab === "upload" && (
-            <div className="p-6 max-w-xl mx-auto pt-8">
-              <h2 className="text-sm font-semibold text-slate-300 mb-4">Upload Document</h2>
-              <DocumentUpload onUploaded={() => setTab("risk")} />
-            </div>
-          )}
-          {tab === "risk" && (
-            <div className="p-4">
-              <RiskReportPanel />
-            </div>
-          )}
+        {/* Tab content — all panels stay mounted so local state is preserved across tab switches */}
+        <div className="relative flex-1 overflow-y-auto">
+          <div className={cn("h-full", tab !== "chat" && "hidden")}><ChatPanel /></div>
+          <div className={cn("p-6 max-w-xl mx-auto pt-8", tab !== "upload" && "hidden")}>
+            <h2 className="text-sm font-semibold text-slate-300 mb-4">Upload Document</h2>
+            <DocumentUpload onUploaded={() => setTab("risk")} />
+          </div>
+          <div className={cn("p-4", tab !== "risk" && "hidden")}><RiskReportPanel /></div>
         </div>
       </div>
 
