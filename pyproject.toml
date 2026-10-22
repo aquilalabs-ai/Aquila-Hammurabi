@@ -1,0 +1,85 @@
+[project]
+name = "aquila-hammurabi"
+version = "0.1.0"
+description = "The Law, Decoded."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    # Ingestion — source connectors
+    "pdfplumber>=0.11",
+    "python-docx>=1.1",
+    "lxml>=5.0",
+    "httpx>=0.27",
+    # Ingestion — chunker
+    "tiktoken>=0.7",
+    # Knowledge — graph + vector
+    "neo4j>=5.0",
+    "qdrant-client>=1.9",
+    # Reasoning — LangGraph agent + chains
+    "langgraph>=0.4",
+    "langchain>=0.3",
+    "langchain-openai>=0.2",
+    "langchain-core>=0.3",
+    # Session persistence
+    "sqlalchemy[asyncio]>=2.0",
+    "psycopg[binary,pool]>=3.1",
+    # Web search (free, no API key — used for legal news in report mode)
+    "ddgs>=9.0",
+    # API layer
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+# NER acceleration — install when a compatible spaCy wheel is available:
+#   pip install "aquila-hammurabi[ner]"
+#   python -m spacy download fr_core_news_lg
+ner = [
+    "spacy>=3.7",
+]
+
+[project.scripts]
+hammurabi = "main:main"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["hammurabi"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["hammurabi"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    # langchain_core imports pydantic.v1 compat shim which warns on Python 3.14+
+    "ignore:Core Pydantic V1 functionality isn't compatible with Python 3.14:UserWarning",
+    # asyncio.iscoroutinefunction deprecated in 3.14, removed in 3.16 — upstream issue in LangChain
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning",
+]
